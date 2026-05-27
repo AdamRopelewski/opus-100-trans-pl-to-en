@@ -398,10 +398,10 @@ def write_report_markdown(manifest: dict[str, Any], out_path: Path) -> None:
     lines.append(f"- Rows: {totals['rows']}")
     lines.append(f"- Null pairs: {totals['null_pairs']}")
     lines.append(f"- Empty pairs: {totals['empty_pairs']}")
-        lines.append(f"- Duplicate pairs: {totals['duplicate_pairs']}")
-        lines.append(f"- Language ID mismatch: {totals['language_id_mismatch']}")
-        lines.append(f"- Language ID skipped: {totals['language_id_skipped']}")
-        lines.append(f"- Suspicious counts: {totals['suspicious']}")
+    lines.append(f"- Duplicate pairs: {totals['duplicate_pairs']}")
+    lines.append(f"- Language ID mismatch: {totals['language_id_mismatch']}")
+    lines.append(f"- Language ID skipped: {totals['language_id_skipped']}")
+    lines.append(f"- Suspicious counts: {totals['suspicious']}")
     lines.append("")
 
     for split in manifest["splits"]:
