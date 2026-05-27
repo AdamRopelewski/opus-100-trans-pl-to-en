@@ -1,6 +1,12 @@
 # Virtual environment
 venv/
 
+# Python cache artifacts
+__pycache__/
+*.pyc
+
 # Keep dataset folder structure, but ignore heavy parquet files
 data/raw/en-pl/*.parquet
 !data/raw/en-pl/.gitkeep
+data/processed/en-pl/*.parquet
+!data/processed/en-pl/.gitkeep

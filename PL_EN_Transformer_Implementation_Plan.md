@@ -75,6 +75,7 @@ project/
     processed/
   tokenizers/
   configs/
+    project_config.yaml
   src/
     data/
     model/
@@ -92,6 +93,8 @@ project/
 Notes:
 - HF split files are already present in `data/raw/en-pl/`.
 - Keep parquet files out of Git via `.gitignore`.
+- Use one central config file: `configs/project_config.yaml`.
+- All scripts read settings from this file (no per-script standalone configs).
 
 ---
 
@@ -112,6 +115,7 @@ Tasks:
 Outputs:
 - `requirements.txt` or `pyproject.toml`.
 - A short setup command list in `README.md`.
+- Central config file: `configs/project_config.yaml`.
 
 Acceptance checks:
 - `python -c "import torch; print(torch.cuda.is_available())"` returns `True`.
@@ -229,7 +233,7 @@ Tasks:
 
 Outputs:
 - `src/model/transformer_nmt.py`
-- `configs/model_base.yaml`
+- Model section inside `configs/project_config.yaml`
 
 Acceptance checks:
 - Single forward/backward step works.
@@ -255,7 +259,7 @@ Outputs:
 - `src/train/train.py`
 - `src/train/losses.py`
 - `src/train/scheduler.py`
-- `configs/train_base_12gb.yaml`
+- Training section inside `configs/project_config.yaml`
 
 Acceptance checks:
 - Loss decreases during first few thousand steps.
@@ -327,25 +331,57 @@ Acceptance checks:
 
 ---
 
-## 6) Baseline Hyperparameter Template (12 GB GPU)
+## 6) Unified Config Template (12 GB GPU)
 
 ```yaml
-seed: 42
-task: pl_to_en
+project:
+  name: pl-en-transformer
+  seed: 42
 
-data:
-  raw_dir: data/raw/en-pl
-  processed_dir: data/processed/en-pl
+paths:
+  raw_data_dir: data/raw/en-pl
+  processed_data_dir: data/processed/en-pl
+  reports_dir: reports
+  tokenizer_dir: tokenizers
+  checkpoints_dir: checkpoints
+  logs_dir: logs
+
+dataset:
+  source_lang: pl
+  target_lang: en
+  splits:
+    train_pattern: train-*.parquet
+    validation_pattern: validation-*.parquet
+    test_pattern: test-*.parquet
+
+stage1_audit:
+  samples_per_split: 5
+  outputs:
+    report_md: reports/data_audit.md
+    manifest_json: reports/data_audit_manifest.json
+
+stage2_cleaning:
+  filters:
+    unicode_normalization: NFKC
+    dedup_scope: split
+    min_words: 1
+    max_words: 200
+    max_length_ratio: 3.0
+  outputs:
+    processed_dir: data/processed/en-pl
+    report_md: reports/cleaning_report.md
+    manifest_json: reports/cleaning_manifest.json
+
+stage4_dataloader:
   max_seq_len: 128
-  min_seq_len: 2
-  length_ratio_max: 3.0
 
-tokenizer:
+stage3_tokenizer:
   type: sentencepiece
   vocab_size: 32000
-  shared_vocab: true
+  character_coverage: 0.9995
+  model_prefix: tokenizers/spm_pl_en
 
-model:
+stage5_model:
   d_model: 512
   nhead: 8
   num_encoder_layers: 6
@@ -354,7 +390,7 @@ model:
   dropout: 0.1
   tie_embeddings: true
 
-train:
+stage6_train:
   precision: fp16
   optimizer: adamw
   lr_peak: 3e-4
@@ -368,13 +404,14 @@ train:
   validate_every_steps: 2000
   save_every_steps: 2000
 
-decode:
+stage7_eval:
   beam_size: 4
   length_penalty: 0.9
 ```
 
 Note:
-- `micro_batch_size` and `grad_accum_steps` are placeholders. Tune them to fit your exact sequence lengths and VRAM usage.
+- Keep all stage options in single `configs/project_config.yaml`.
+- `micro_batch_size` and `grad_accum_steps` are placeholders. Tune by VRAM usage.
 
 ---
 
@@ -406,8 +443,6 @@ Project is complete when:
 
 ## 9) Next Immediate Actions
 
-1. Create environment and install dependencies.
-2. Run Stage 1 audit script on `data/raw/en-pl` parquet files.
-3. Implement Stage 2 cleaning and generate cleaned outputs in `data/processed/en-pl`.
-4. Train tokenizer and freeze vocabulary.
-5. Implement model and run a tiny overfit test before full training.
+
+1. Train tokenizer and freeze vocabulary.
+2. Implement model and run a tiny overfit test before full training.

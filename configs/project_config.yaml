@@ -1,0 +1,81 @@
+project:
+  name: pl-en-transformer
+  seed: 42
+
+paths:
+  raw_data_dir: data/raw/en-pl
+  processed_data_dir: data/processed/en-pl
+  reports_dir: reports
+  tokenizer_dir: tokenizers
+  checkpoints_dir: checkpoints
+  logs_dir: logs
+
+dataset:
+  source_lang: pl
+  target_lang: en
+  splits:
+    train_pattern: train-*.parquet
+    validation_pattern: validation-*.parquet
+    test_pattern: test-*.parquet
+
+stage1_audit:
+  enabled: true
+  samples_per_split: 5
+  outputs:
+    report_md: reports/data_audit.md
+    manifest_json: reports/data_audit_manifest.json
+
+stage2_cleaning:
+  enabled: true
+  filters:
+    unicode_normalization: NFKC
+    min_words: 1
+    max_words: 200
+    max_length_ratio: 3.0
+    dedup_scope: split
+  outputs:
+    processed_dir: data/processed/en-pl
+    report_md: reports/cleaning_report.md
+    manifest_json: reports/cleaning_manifest.json
+
+stage3_tokenizer:
+  enabled: false
+  type: sentencepiece
+  vocab_size: 32000
+  character_coverage: 0.9995
+  model_prefix: tokenizers/spm_pl_en
+
+stage4_dataloader:
+  enabled: false
+  max_seq_len: 128
+  pad_to_multiple_of: null
+
+stage5_model:
+  enabled: false
+  d_model: 512
+  nhead: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  tie_embeddings: true
+
+stage6_train:
+  enabled: false
+  precision: fp16
+  optimizer: adamw
+  lr_peak: 3.0e-4
+  warmup_steps: 4000
+  weight_decay: 0.01
+  label_smoothing: 0.1
+  grad_clip_norm: 1.0
+  micro_batch_size: 16
+  grad_accum_steps: 8
+  num_epochs: 12
+  validate_every_steps: 2000
+  save_every_steps: 2000
+
+stage7_eval:
+  enabled: false
+  beam_size: 4
+  length_penalty: 0.9
