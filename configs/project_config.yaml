@@ -9,6 +9,7 @@ paths:
   tokenizer_dir: tokenizers
   checkpoints_dir: checkpoints
   logs_dir: logs
+  translations_dir: reports/translations
 
 dataset:
   source_lang: pl
@@ -20,50 +21,107 @@ dataset:
 
 stage1_audit:
   enabled: true
-  samples_per_split: 5
+  samples_per_split: 100
+  language_id:
+    backend: langid
+    strict_dependency: false
   outputs:
     report_md: reports/data_audit.md
     manifest_json: reports/data_audit_manifest.json
+  checks:
+    null_pairs: true
+    empty_pairs: true
+    duplicate_pairs: true
+    language_id: true
+    identical_source_target: true
+    html_xml_tags: true
+    weird_unicode: true
+    control_chars: true
+    numeric_mismatch: true
+    punctuation_only: true
+    very_short_pairs: true
+    length_stats: true
 
 stage2_cleaning:
   enabled: true
   filters:
     unicode_normalization: NFKC
+    strip_whitespace: true
+    collapse_whitespace: true
+    remove_control_chars: true
     min_words: 1
     max_words: 200
     max_length_ratio: 3.0
-    dedup_scope: split
+    remove_identical_pairs: true
+    language_id_filter:
+      enabled: true
+      source_lang: pl
+      target_lang: en
+      backend: langid
+      strict_dependency: false
+    dedup_scope: global
+    remove_train_pairs_present_in_validation_or_test: true
+    preserve_validation_test_priority: true
   outputs:
     processed_dir: data/processed/en-pl
     report_md: reports/cleaning_report.md
     manifest_json: reports/cleaning_manifest.json
+    removed_examples_jsonl: reports/removed_examples.jsonl
 
 stage3_tokenizer:
   enabled: false
   type: sentencepiece
+  model_type: bpe
   vocab_size: 32000
-  character_coverage: 0.9995
+  character_coverage: 1.0
+  joint_vocab: true
   model_prefix: tokenizers/spm_pl_en
+  input_sentence_size: 2000000
+  shuffle_input_sentence: true
+  special_tokens:
+    pad: "<pad>"
+    unk: "<unk>"
+    bos: "<bos>"
+    eos: "<eos>"
 
 stage4_dataloader:
   enabled: false
   max_seq_len: 128
-  pad_to_multiple_of: null
+  pad_to_multiple_of: 8
+  bucket_by_length: true
+  drop_overlength: true
+  num_workers: 4
+  pin_memory: true
 
 stage5_model:
   enabled: false
-  d_model: 512
-  nhead: 8
-  num_encoder_layers: 6
-  num_decoder_layers: 6
-  dim_feedforward: 2048
-  dropout: 0.1
-  tie_embeddings: true
+  preset: small
+  presets:
+    small:
+      d_model: 256
+      nhead: 8
+      num_encoder_layers: 4
+      num_decoder_layers: 4
+      dim_feedforward: 1024
+      dropout: 0.1
+      tie_decoder_embeddings: true
+      tie_encoder_decoder_embeddings: false
+    base:
+      d_model: 512
+      nhead: 8
+      num_encoder_layers: 6
+      num_decoder_layers: 6
+      dim_feedforward: 2048
+      dropout: 0.1
+      tie_decoder_embeddings: true
+      tie_encoder_decoder_embeddings: false
 
 stage6_train:
   enabled: false
-  precision: fp16
+  precision: bf16
+  fallback_precision: fp16
   optimizer: adamw
+  scheduler: inverse_sqrt
   lr_peak: 3.0e-4
   warmup_steps: 4000
   weight_decay: 0.01
@@ -74,8 +132,29 @@ stage6_train:
   num_epochs: 12
   validate_every_steps: 2000
   save_every_steps: 2000
+  save_best_by: validation_loss
+  early_stopping_patience: 5
+  log_grad_norm: true
+  skip_nan_batches: true
+  resume_from_checkpoint: null
 
 stage7_eval:
   enabled: false
   beam_size: 4
-  length_penalty: 0.9
+  length_penalty: 1.0
+  max_new_tokens: 128
+  metrics:
+    - sacrebleu
+    - chrf
+  save_translations: true
+  num_sample_translations: 100
+  outputs:
+    metrics_json: reports/eval_metrics.json
+    translations_tsv: reports/translations/test_translations.tsv
+    samples_md: reports/translations/sample_translations.md
+
+smoke:
+  enabled: false
+  limit_train_samples: 1024
+  limit_validation_samples: 256
+  max_steps: 20

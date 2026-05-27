@@ -130,49 +130,93 @@ Objective:
 
 Tasks:
 - Read `train`, `validation`, `test` from `data/raw/en-pl/*.parquet`.
-- Print split sizes and sample examples.
-- Save a local manifest (counts, sample lengths, null counts, duplicates).
+- Report split sizes, null/empty pairs, duplicate pairs.
+- Report length statistics for chars and words in PL/EN.
+- Detect suspicious pairs:
+  - identical source and target
+  - HTML/XML tags
+  - control characters
+  - weird unicode classes
+  - punctuation-only pairs
+  - very short pairs
+  - numeric mismatch between source and target
+  - optional language-id mismatch
+- Save deterministic random samples and suspicious samples using seed from config.
+- Save markdown report and JSON manifest.
 
 Outputs:
 - Script: `scripts/data_audit.py`.
+- Utility module: `src/utils/data_audit.py`.
+- Optional language-id runtime helper: `src/utils/language_id.py`.
 - Report: `reports/data_audit.md`.
+- Manifest: `reports/data_audit_manifest.json`.
 
 Acceptance checks:
 - Split counts are known and documented.
 - No schema surprises in `translation['pl']` and `translation['en']`.
+- Suspicious counts and samples are reported per split.
+- Report reproducible for fixed `project.seed`.
 
 Status:
 - Dataset split acquisition from HF is done.
-- This stage now focuses only on validation and reporting.
+- Stage 1 implemented.
 
 ---
 
 ## Stage 2 - Data Cleaning and Filtering
 
 Objective:
-- Remove low-quality pairs that harm training stability and BLEU.
+- Remove low-quality pairs safely and prevent train-validation/test leakage.
 
 Tasks:
-- Drop empty pairs.
-- Normalize unicode (NFKC), trim spaces.
-- Remove exact duplicates.
-- Filter by length (`min_len`, `max_len`).
-- Filter by source/target length ratio (for example <= 3.0).
-- Optional: language ID filter to remove wrong-language rows.
+- Normalize source and target text:
+  - Unicode normalization (`NFKC`)
+  - strip whitespace
+  - collapse whitespace
+  - remove control chars
+- Filter rows:
+  - null pairs
+  - empty pairs
+  - min/max words
+  - source/target length ratio
+  - identical source-target
+  - optional language-id mismatch
+- Deduplicate on normalized `(source, target)` hash.
+- Support `dedup_scope=global` with leakage protection:
+  - process validation/test before train if `preserve_validation_test_priority=true`
+  - remove train pairs present in validation/test when
+    `remove_train_pairs_present_in_validation_or_test=true`
+  - never move rows between splits
+- Track removal reasons per row and per split.
+- For rows matching multiple filters, keep all reasons but pick one stable
+  primary reason by priority.
+- Save removed examples to JSONL with `reason` and `all_reasons`.
 - Save cleaned outputs as parquet in `data/processed/en-pl/`.
 
 Outputs:
 - Script: `scripts/clean_data.py`.
-- Clean dataset files in `data/processed/`.
-- Cleaning summary report in `reports/cleaning_report.md`.
+- Utility module: `src/utils/clean_data.py`.
+- Optional language-id runtime helper: `src/utils/language_id.py`.
+- Clean dataset files in `data/processed/en-pl/`.
+- Cleaning summary report: `reports/cleaning_report.md`.
+- Cleaning manifest: `reports/cleaning_manifest.json`.
+- Removed examples JSONL: `reports/removed_examples.jsonl`.
 
 Acceptance checks:
-- Cleaned train set is close to intended size (around 1M, after filtering).
-- Ratio and length distributions look reasonable.
+- No leaked pair from validation/test remains in train when leakage filter is on.
+- Primary removal reasons and totals are documented.
+- Language-id behavior explicit: enabled, skipped, or strict error.
+
+Status:
+- Stage 2 implemented.
 
 ---
 
 ## Stage 3 - Tokenizer Training
+
+Implementation note:
+- Not implemented in code yet.
+- Config stays prepared for SentencePiece training in a future step.
 
 Objective:
 - Train a shared subword tokenizer suitable for Polish morphology and English output.
@@ -192,9 +236,19 @@ Acceptance checks:
 - Tokenization and detokenization are stable.
 - Unknown token rate is low on validation split.
 
+Status:
+- Planned only (not implemented yet).
+
 ---
 
 ## Stage 4 - Dataset Pipeline in PyTorch
+
+Implementation note:
+- Not implemented in code yet.
+- Planned scope includes fp16/bf16-safe padding, masks, and batch smoke tests.
+
+Status:
+- Planned only (not implemented yet).
 
 Objective:
 - Build efficient train/val/test dataloaders with proper masks.
@@ -222,6 +276,13 @@ Acceptance checks:
 
 ## Stage 5 - Model Implementation
 
+Implementation note:
+- Not implemented in code yet.
+- Planned presets: `small` and `base`, with explicit embedding tying flags.
+
+Status:
+- Planned only (not implemented yet).
+
 Objective:
 - Implement encoder-decoder Transformer with multi-head attention.
 
@@ -243,6 +304,13 @@ Acceptance checks:
 ---
 
 ## Stage 6 - Training Loop and Optimization
+
+Implementation note:
+- Not implemented in code yet.
+- Planned: scheduler, checkpointing, precision fallback, NaN handling, resume flow.
+
+Status:
+- Planned only (not implemented yet).
 
 Objective:
 - Train stably on a 12 GB GPU with reproducible checkpoints.
@@ -270,6 +338,13 @@ Acceptance checks:
 
 ## Stage 7 - Validation, BLEU, chrF++
 
+Implementation note:
+- Not implemented in code yet.
+- Planned: validation and test evaluation with sacreBLEU/chrF and translation artifacts.
+
+Status:
+- Planned only (not implemented yet).
+
 Objective:
 - Measure translation quality and prevent overfitting.
 
@@ -292,6 +367,9 @@ Acceptance checks:
 
 ## Stage 8 - Final Test Evaluation
 
+Status:
+- Planned only (not implemented yet).
+
 Objective:
 - Produce final benchmark numbers and example translations.
 
@@ -311,6 +389,9 @@ Acceptance checks:
 ---
 
 ## Stage 9 - Iteration Plan (After Baseline)
+
+Status:
+- Planned only (not implemented yet).
 
 Objective:
 - Improve quality in controlled experiments.
