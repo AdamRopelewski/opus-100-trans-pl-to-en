@@ -1,0 +1,4 @@
+- dont skip very short. right now very short is more like short
+- lang id mislablees but there are some to be filltered out
+- add parraler or only partial trian set or run on test set cuz smaller just to test out the fillter params
+- add all confi g into project config eg. what is a very short sentence

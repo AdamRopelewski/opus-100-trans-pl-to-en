@@ -166,6 +166,7 @@ def _row_suspicious_reasons(
     en_text: str,
     checks: Stage1Checks,
     lid_detect,
+    lid_check_enabled: bool,
     source_lang: str,
     target_lang: str,
 ) -> tuple[list[str], bool, list[str]]:
@@ -186,7 +187,7 @@ def _row_suspicious_reasons(
         reasons.append("numeric_mismatch")
     lid_mismatch = False
     lid_skipped_reasons: list[str] = []
-    if checks.language_id:
+    if checks.language_id and lid_check_enabled:
         lid_mismatch, lid_skipped_reasons = _language_id_mismatch(
             pl_text=pl_text,
             en_text=en_text,
@@ -208,6 +209,7 @@ def audit_split(
     source_lang: str,
     target_lang: str,
     lid_detect,
+    lid_max_rows: int,
     show_progress: bool = True,
 ) -> SplitAudit:
     dataset = Dataset.from_parquet(str(file_path))
@@ -226,6 +228,7 @@ def audit_split(
     lid_failed_row_indices: list[int] = []
     lid_skipped_row_indices: list[int] = []
     lid_skipped_reason_counts: Counter[str] = Counter()
+    lid_rows_checked = 0
 
     valid_rows: list[dict[str, str]] = []
     suspicious_rows: list[dict[str, Any]] = []
@@ -284,9 +287,12 @@ def audit_split(
             en_norm,
             checks,
             lid_detect,
+            lid_rows_checked < lid_max_rows,
             source_lang,
             target_lang,
         )
+        if checks.language_id and lid_detect is not None and lid_rows_checked < lid_max_rows:
+            lid_rows_checked += 1
         if lid_mismatch:
             lid_failed_row_indices.append(row_idx)
         if lid_skipped_reasons:
@@ -326,6 +332,8 @@ def audit_split(
         suspicious_counts=dict(sorted(suspicious_counts.items())),
         language_id={
             "enabled_in_audit": checks.language_id,
+            "max_rows": lid_max_rows,
+            "rows_checked": lid_rows_checked,
             "mismatch_count": len(lid_failed_row_indices),
             "mismatch_row_indices": lid_failed_row_indices,
             "skipped_count": len(lid_skipped_row_indices),

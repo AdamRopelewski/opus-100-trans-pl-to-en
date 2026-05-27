@@ -35,6 +35,7 @@ def test_audit_detects_suspicious_pairs(tmp_path: Path) -> None:
         source_lang="pl",
         target_lang="en",
         lid_detect=None,
+        lid_max_rows=0,
     )
 
     assert result.rows == 3

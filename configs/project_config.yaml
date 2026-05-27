@@ -25,6 +25,7 @@ stage1_audit:
   language_id:
     backend: langid
     strict_dependency: false
+    max_rows: 20000
   outputs:
     report_md: reports/data_audit.md
     manifest_json: reports/data_audit_manifest.json

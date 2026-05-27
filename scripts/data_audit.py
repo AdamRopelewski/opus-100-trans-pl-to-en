@@ -53,15 +53,15 @@ def main() -> int:
     samples_per_split = int(get_nested(config, "stage1_audit.samples_per_split", 5))
     seed = int(get_nested(config, "project.seed", 42))
     checks = Stage1Checks(**dict(get_nested(config, "stage1_audit.checks", {})))
-    checks.language_id = True
     source_lang = str(get_nested(config, "dataset.source_lang", "pl"))
     target_lang = str(get_nested(config, "dataset.target_lang", "en"))
     strict_lid_dependency = bool(
         get_nested(config, "stage1_audit.language_id.strict_dependency", False)
     )
+    lid_max_rows = int(get_nested(config, "stage1_audit.language_id.max_rows", 50000))
 
-    lid_runtime = build_language_id_runtime(True, strict_dependency=strict_lid_dependency)
-    if not lid_runtime.enabled:
+    lid_runtime = build_language_id_runtime(checks.language_id, strict_dependency=strict_lid_dependency)
+    if checks.language_id and not lid_runtime.enabled:
         print(f"Language ID audit unavailable at runtime: {lid_runtime.reason}")
     split_patterns = {
         "train": str(get_nested(config, "dataset.splits.train_pattern", "train-*.parquet")),
@@ -100,6 +100,7 @@ def main() -> int:
                 source_lang=source_lang,
                 target_lang=target_lang,
                 lid_detect=lid_runtime.detect if lid_runtime.enabled else None,
+                lid_max_rows=lid_max_rows,
                 show_progress=True,
             )
         )
