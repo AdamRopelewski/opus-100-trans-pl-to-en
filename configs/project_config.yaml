@@ -31,10 +31,10 @@ stage1_audit:
   llm:
     model: qwen2.5:7b
     endpoint: http://localhost:11434/api/generate
-    batch_max_chars: 12000
+    batch_max_chars: 2000
     max_rows_per_batch: 200
     temperature: 0.0
-    max_batch_retries: 2
+    max_batch_retries: 1
     uncertain_ratio_rerun_threshold: 0.9
     verbose: false
     verbose_preview_rows: 10

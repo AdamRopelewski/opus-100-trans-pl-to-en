@@ -149,10 +149,10 @@ def _build_batches(records: list[dict[str, Any]], max_chars: int, max_rows: int)
 
 
 def _prompt_for_batch(batch: list[dict[str, Any]]) -> str:
-    rows = "\n".join([f"id:{r['row_index']} pl:{r['pl']} en:{r['en']}" for r in batch])
+    rows = "\n".join([f"id:{idx} pl:{r['pl']} en:{r['en']}" for idx, r in enumerate(batch)])
     return (
         "You are auditing Polish-English translation pairs.\n"
-        "The translation doesnt have to be perfect, u only fillter out the obvious bad ones.\n"
+        "The translation doesnt have to be perfect, you only fillter out the obvious bad ones.\n"
         "Classify each id into exactly one bucket:\n"
         "- good: valid translation pair\n"
         "- bad: wrong/noisy/non-translation/meta/code-like pair\n"
@@ -169,6 +169,7 @@ def _ollama_generate(cfg: LlmAuditConfig, prompt: str) -> str:
         "prompt": prompt,
         "stream": False,
         "format": "json",
+        "context": [],
         "options": {"temperature": cfg.temperature},
     }
     req = urllib.request.Request(
@@ -288,7 +289,8 @@ def run_stage1_llm_audit(
                         _log(f"[audit][{split}] first {preview_n} rows sent to Ollama:")
                         for rec in batch[:preview_n]:
                             _log(f"  id:{rec['row_index']} pl:{rec['pl']} en:{rec['en']}")
-                ids = {int(x["row_index"]) for x in batch}
+                local_to_row_id = {i: int(rec["row_index"]) for i, rec in enumerate(batch)}
+                ids = set(local_to_row_id.keys())
                 prompt = _prompt_for_batch(batch)
                 attempt_logs: list[dict[str, Any]] = []
                 valid: dict[str, list[int]] | None = None
@@ -358,8 +360,8 @@ def run_stage1_llm_audit(
                     )
                 per_id = {}
                 for label in ("good", "bad", "uncertain"):
-                    for i in valid[label]:
-                        per_id[i] = label
+                    for local_id in valid[label]:
+                        per_id[local_to_row_id[local_id]] = label
 
                 if cfg.verbose:
                     preview_n = max(0, min(cfg.verbose_preview_rows, len(batch)))
