@@ -46,7 +46,17 @@ What it does:
   - `reports/data_audit_manifest.json`
   - `reports/llm_audit_labels.jsonl`
   - `reports/llm_audit_batches.jsonl`
-- `reports/llm_bad_sentences.json`
+  - `reports/llm_bad_sentences.json`
+  - per-split artifacts:
+    - `reports/llm_audit_labels_validation.jsonl`
+    - `reports/llm_audit_labels_test.jsonl`
+    - `reports/llm_audit_labels_train.jsonl`
+    - `reports/llm_audit_batches_validation.jsonl`
+    - `reports/llm_audit_batches_test.jsonl`
+    - `reports/llm_audit_batches_train.jsonl`
+    - `reports/llm_bad_sentences_validation.json`
+    - `reports/llm_bad_sentences_test.json`
+    - `reports/llm_bad_sentences_train.json`
 
 
 ## Stage 2: Cleaning
@@ -69,10 +79,10 @@ Critical behavior:
 - Stage 2 **does remove rows** from output dataset.
 - It does not only generate JSON suggestions.
 
-Language ID behavior in Stage 2:
-- Audit/telemetry only (not a removal reason).
-- Mismatch counts and row indices are logged for manual review.
-- Very short + numeric/punctuation-only rows are skipped for Language ID.
+Stage 2 behavior note:
+- No language-ID filter is used.
+- Filtering is based on normalization, min/max words, length ratio,
+  identical-pair checks, deduplication, and leakage protection.
 
 
 ## Leakage safety and dedup policy (implemented)
@@ -119,7 +129,7 @@ python scripts/data_audit.py --config configs/project_config.yaml
 python scripts/clean_data.py --config configs/project_config.yaml
 ```
 
-Verbose audit mode (prints Ollama raw response per batch and first preview rows sent to model):
+Verbose audit mode (prints batch preview rows, parsed label counts, and running totals):
 
 ```bash
 python scripts/data_audit.py --config configs/project_config.yaml --verbose
@@ -138,3 +148,7 @@ ollama pull qwen2.5:7b
 - Processed data: `data/processed/en-pl`
 - Reports: `reports/`
 - Implementation plan: `PL_EN_Transformer_Implementation_Plan.md`
+
+Note on config scope:
+- `stage3_tokenizer` through `stage7_eval` and `smoke` are placeholders for planned stages.
+- Only Stage 1 and Stage 2 are implemented in code right now.

@@ -39,16 +39,47 @@ def main() -> int:
     args = parser.parse_args()
 
     config_data = load_config(args.config)
+    paths_cfg = {
+        "raw_data_dir": Path(get_nested(config_data, "paths.raw_data_dir", "data/raw/en-pl")),
+        "processed_data_dir": Path(get_nested(config_data, "paths.processed_data_dir", "data/processed/en-pl")),
+        "reports_dir": Path(get_nested(config_data, "paths.reports_dir", "reports")),
+        "tokenizer_dir": Path(get_nested(config_data, "paths.tokenizer_dir", "tokenizers")),
+        "checkpoints_dir": Path(get_nested(config_data, "paths.checkpoints_dir", "checkpoints")),
+        "logs_dir": Path(get_nested(config_data, "paths.logs_dir", "logs")),
+        "translations_dir": Path(get_nested(config_data, "paths.translations_dir", "reports/translations")),
+    }
     if not bool(get_nested(config_data, "stage2_cleaning.enabled", True)):
         print("stage2_cleaning.enabled is false, skipping cleaning.")
         return 0
 
-    raw_dir = Path(get_nested(config_data, "paths.raw_data_dir", "data/raw/en-pl"))
-    processed_dir = Path(get_nested(config_data, "stage2_cleaning.outputs.processed_dir", "data/processed/en-pl"))
-    report_path = Path(get_nested(config_data, "stage2_cleaning.outputs.report_md", "reports/cleaning_report.md"))
-    manifest_path = Path(get_nested(config_data, "stage2_cleaning.outputs.manifest_json", "reports/cleaning_manifest.json"))
+    raw_dir = paths_cfg["raw_data_dir"]
+    processed_dir = Path(
+        get_nested(
+            config_data,
+            "stage2_cleaning.outputs.processed_dir",
+            str(paths_cfg["processed_data_dir"]),
+        )
+    )
+    report_path = Path(
+        get_nested(
+            config_data,
+            "stage2_cleaning.outputs.report_md",
+            str(paths_cfg["reports_dir"] / "cleaning_report.md"),
+        )
+    )
+    manifest_path = Path(
+        get_nested(
+            config_data,
+            "stage2_cleaning.outputs.manifest_json",
+            str(paths_cfg["reports_dir"] / "cleaning_manifest.json"),
+        )
+    )
     removed_examples_path = Path(
-        get_nested(config_data, "stage2_cleaning.outputs.removed_examples_jsonl", "reports/removed_examples.jsonl")
+        get_nested(
+            config_data,
+            "stage2_cleaning.outputs.removed_examples_jsonl",
+            str(paths_cfg["reports_dir"] / "removed_examples.jsonl"),
+        )
     )
     split_patterns = {
         "train": str(get_nested(config_data, "dataset.splits.train_pattern", "train-*.parquet")),

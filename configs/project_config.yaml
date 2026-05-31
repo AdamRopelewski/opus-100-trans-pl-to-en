@@ -21,7 +21,6 @@ dataset:
 
 stage1_audit:
   enabled: true
-  samples_per_split: 200
   preaudit:
     deduplicate_pairs: true
     remove_identical_pairs: true
@@ -32,7 +31,7 @@ stage1_audit:
   llm:
     model: qwen2.5:7b
     endpoint: http://localhost:11434/api/generate
-    batch_max_chars: 20000
+    batch_max_chars: 12000
     max_rows_per_batch: 200
     temperature: 0.0
     max_batch_retries: 2

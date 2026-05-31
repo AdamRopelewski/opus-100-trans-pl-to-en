@@ -47,13 +47,31 @@ def main() -> int:
     args = _build_parser().parse_args()
     config = load_config(args.config)
 
+    paths_cfg = {
+        "raw_data_dir": Path(get_nested(config, "paths.raw_data_dir", "data/raw/en-pl")),
+        "processed_data_dir": Path(get_nested(config, "paths.processed_data_dir", "data/processed/en-pl")),
+        "reports_dir": Path(get_nested(config, "paths.reports_dir", "reports")),
+        "tokenizer_dir": Path(get_nested(config, "paths.tokenizer_dir", "tokenizers")),
+        "checkpoints_dir": Path(get_nested(config, "paths.checkpoints_dir", "checkpoints")),
+        "logs_dir": Path(get_nested(config, "paths.logs_dir", "logs")),
+        "translations_dir": Path(get_nested(config, "paths.translations_dir", "reports/translations")),
+    }
+
     if not bool(get_nested(config, "stage1_audit.enabled", True)):
         print("stage1_audit.enabled is false, skipping audit.")
         return 0
 
-    data_dir = Path(get_nested(config, "paths.raw_data_dir", "data/raw/en-pl"))
-    report_path = Path(get_nested(config, "stage1_audit.outputs.report_md", "reports/data_audit.md"))
-    manifest_path = Path(get_nested(config, "stage1_audit.outputs.manifest_json", "reports/data_audit_manifest.json"))
+    data_dir = paths_cfg["raw_data_dir"]
+    report_path = Path(
+        get_nested(config, "stage1_audit.outputs.report_md", str(paths_cfg["reports_dir"] / "data_audit.md"))
+    )
+    manifest_path = Path(
+        get_nested(
+            config,
+            "stage1_audit.outputs.manifest_json",
+            str(paths_cfg["reports_dir"] / "data_audit_manifest.json"),
+        )
+    )
 
     split_patterns = {
         "validation": str(get_nested(config, "dataset.splits.validation_pattern", "validation-*.parquet")),
@@ -92,7 +110,7 @@ def main() -> int:
         verbose_preview_rows=int(get_nested(config, "stage1_audit.llm.verbose_preview_rows", 10)),
     )
 
-    reports_dir = Path(get_nested(config, "paths.reports_dir", "reports"))
+    reports_dir = paths_cfg["reports_dir"]
     preaudit_cfg = PreAuditConfig(
         deduplicate_pairs=bool(get_nested(config, "stage1_audit.preaudit.deduplicate_pairs", True)),
         remove_identical_pairs=bool(get_nested(config, "stage1_audit.preaudit.remove_identical_pairs", True)),
@@ -127,6 +145,11 @@ def main() -> int:
     print(f"Wrote manifest: {manifest_path}")
     print(f"Wrote labels: {manifest['artifacts']['labels_jsonl']}")
     print(f"Wrote bad sentences: {manifest['artifacts']['bad_json']}")
+    for split in ("validation", "test", "train"):
+        if split in manifest["artifacts"].get("labels_jsonl_by_split", {}):
+            print(f"Wrote labels ({split}): {manifest['artifacts']['labels_jsonl_by_split'][split]}")
+            print(f"Wrote batches ({split}): {manifest['artifacts']['batches_jsonl_by_split'][split]}")
+            print(f"Wrote bad ({split}): {manifest['artifacts']['bad_json_by_split'][split]}")
     return 0
 
 

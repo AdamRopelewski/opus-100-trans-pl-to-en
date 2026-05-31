@@ -237,11 +237,19 @@ def run_stage1_llm_audit(
     labels_path = reports_dir / "llm_audit_labels.jsonl"
     batches_path = reports_dir / "llm_audit_batches.jsonl"
     bad_path = reports_dir / "llm_bad_sentences.json"
+    labels_by_split_paths = {s: reports_dir / f"llm_audit_labels_{s}.jsonl" for s in split_files}
+    batches_by_split_paths = {s: reports_dir / f"llm_audit_batches_{s}.jsonl" for s in split_files}
+    bad_by_split_paths = {s: reports_dir / f"llm_bad_sentences_{s}.json" for s in split_files}
 
     totals = Counter()
     total_preaudit_dropped: Counter[str] = Counter()
     split_stats: list[dict[str, Any]] = []
     all_bad_records: list[dict[str, Any]] = []
+    bad_records_by_split: dict[str, list[dict[str, Any]]] = {s: [] for s in split_files}
+
+    for split_name in split_files:
+        labels_by_split_paths[split_name].write_text("", encoding="utf-8")
+        batches_by_split_paths[split_name].write_text("", encoding="utf-8")
 
     with labels_path.open("w", encoding="utf-8") as labels_fp, batches_path.open("w", encoding="utf-8") as batches_fp:
         split_items = list(split_files.items())
@@ -327,6 +335,21 @@ def run_stage1_llm_audit(
                     )
                     + "\n"
                 )
+                with batches_by_split_paths[split].open("a", encoding="utf-8") as split_batches_fp:
+                    split_batches_fp.write(
+                        json.dumps(
+                            {
+                                "split": split,
+                                "batch_index": bidx,
+                                "size": len(batch),
+                                "attempts": attempt_logs,
+                                "uncertain_triggered": uncertain_triggered,
+                                "result": valid,
+                            },
+                            ensure_ascii=True,
+                        )
+                        + "\n"
+                    )
 
                 if uncertain_triggered and _needs_rerun(valid, cfg.uncertain_ratio_rerun_threshold):
                     raise UncertainBatchError(
@@ -371,8 +394,11 @@ def run_stage1_llm_audit(
                         "en": rec["en"],
                     }
                     labels_fp.write(json.dumps(out, ensure_ascii=True) + "\n")
+                    with labels_by_split_paths[split].open("a", encoding="utf-8") as split_labels_fp:
+                        split_labels_fp.write(json.dumps(out, ensure_ascii=True) + "\n")
                     if label == "bad":
                         all_bad_records.append(out)
+                        bad_records_by_split[split].append(out)
 
                 if cfg.verbose:
                     _log(
@@ -408,6 +434,18 @@ def run_stage1_llm_audit(
                 )
 
     bad_path.write_text(json.dumps({"count": len(all_bad_records), "records": all_bad_records}, ensure_ascii=True, indent=2), encoding="utf-8")
+    for split_name in split_files:
+        bad_by_split_paths[split_name].write_text(
+            json.dumps(
+                {
+                    "count": len(bad_records_by_split[split_name]),
+                    "records": bad_records_by_split[split_name],
+                },
+                ensure_ascii=True,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     manifest = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -430,6 +468,9 @@ def run_stage1_llm_audit(
             "labels_jsonl": str(labels_path),
             "batches_jsonl": str(batches_path),
             "bad_json": str(bad_path),
+            "labels_jsonl_by_split": {k: str(v) for k, v in labels_by_split_paths.items()},
+            "batches_jsonl_by_split": {k: str(v) for k, v in batches_by_split_paths.items()},
+            "bad_json_by_split": {k: str(v) for k, v in bad_by_split_paths.items()},
         },
     }
     if cfg.verbose:
@@ -491,6 +532,21 @@ def write_llm_audit_report(manifest: dict[str, Any], out_md: Path, out_json: Pat
             f"- batch logs: `{manifest['artifacts']['batches_jsonl']}`",
             f"- bad sentences: `{manifest['artifacts']['bad_json']}`",
             "",
+            "### Per-split artifacts",
+            "",
         ]
     )
+    for split_name in ("validation", "test", "train"):
+        labels_map = manifest["artifacts"].get("labels_jsonl_by_split", {})
+        batches_map = manifest["artifacts"].get("batches_jsonl_by_split", {})
+        bad_map = manifest["artifacts"].get("bad_json_by_split", {})
+        if split_name in labels_map:
+            lines.extend(
+                [
+                    f"- {split_name} labels: `{labels_map[split_name]}`",
+                    f"- {split_name} batch logs: `{batches_map[split_name]}`",
+                    f"- {split_name} bad sentences: `{bad_map[split_name]}`",
+                ]
+            )
+    lines.append("")
     out_md.write_text("\n".join(lines), encoding="utf-8")

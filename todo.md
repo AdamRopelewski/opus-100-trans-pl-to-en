@@ -1,4 +1,4 @@
-- dont skip very short. right now very short is more like short
-- lang id mislablees but there are some to be filltered out
-- add parraler or only partial trian set or run on test set cuz smaller just to test out the fillter params
-- add all confi g into project config eg. what is a very short sentence
+- stage1 audit: tune uncertain threshold and retry count on a small subset first
+- stage2 use reports from stage1 so we dont recompute just create the clensed DS
+- config hygiene: keep all runtime thresholds centralized in project config
+- tests: add unit coverage for llm_audit validation/retry/artifact writing

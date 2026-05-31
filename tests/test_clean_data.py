@@ -97,7 +97,7 @@ def test_validation_priority_when_duplicate_across_val_test(tmp_path: Path) -> N
         "validation": raw_dir / "validation-00000-of-00001.parquet",
         "test": raw_dir / "test-00000-of-00001.parquet",
     }
-    stats, _lid_audit, _reasons = clean_splits(split_files, proc_dir, cfg, removed_path)
+    stats, _audit_meta, _reasons = clean_splits(split_files, proc_dir, cfg, removed_path)
     by_split = {s.split: s for s in stats}
 
     assert by_split["validation"].rows_out == 1
