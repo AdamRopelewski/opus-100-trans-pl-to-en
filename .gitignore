@@ -10,3 +10,6 @@ data/raw/en-pl/*.parquet
 !data/raw/en-pl/.gitkeep
 data/processed/en-pl/*.parquet
 !data/processed/en-pl/.gitkeep
+
+models/
+!models/.gitkeep

@@ -11,12 +11,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.utils.config import get_nested, load_config
 from src.utils.clean_data import (
     CleaningConfig,
-    LanguageIdFilterConfig,
     clean_splits,
     create_cleaning_manifest,
     write_cleaning_manifest_json,
     write_cleaning_report_markdown,
 )
+from src.utils.pipeline_constants import DEFAULT_MAX_LENGTH_RATIO
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -69,8 +69,6 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 3
 
-    language_id_filter_cfg = dict(get_nested(config_data, "stage2_cleaning.filters.language_id_filter", {}))
-
     config = CleaningConfig(
         unicode_normalization=str(get_nested(config_data, "stage2_cleaning.filters.unicode_normalization", "NFKC")),
         strip_whitespace=bool(get_nested(config_data, "stage2_cleaning.filters.strip_whitespace", True)),
@@ -78,7 +76,9 @@ def main() -> int:
         remove_control_chars=bool(get_nested(config_data, "stage2_cleaning.filters.remove_control_chars", True)),
         min_words=int(get_nested(config_data, "stage2_cleaning.filters.min_words", 1)),
         max_words=int(get_nested(config_data, "stage2_cleaning.filters.max_words", 200)),
-        max_length_ratio=float(get_nested(config_data, "stage2_cleaning.filters.max_length_ratio", 3.0)),
+        max_length_ratio=float(
+            get_nested(config_data, "stage2_cleaning.filters.max_length_ratio", DEFAULT_MAX_LENGTH_RATIO)
+        ),
         remove_identical_pairs=bool(get_nested(config_data, "stage2_cleaning.filters.remove_identical_pairs", True)),
         dedup_scope=str(get_nested(config_data, "stage2_cleaning.filters.dedup_scope", "global")),
         remove_train_pairs_present_in_validation_or_test=bool(
@@ -91,28 +91,19 @@ def main() -> int:
         preserve_validation_test_priority=bool(
             get_nested(config_data, "stage2_cleaning.filters.preserve_validation_test_priority", True)
         ),
-        language_id_filter=LanguageIdFilterConfig(
-            enabled=True,
-            source_lang=str(language_id_filter_cfg.get("source_lang", "pl")),
-            target_lang=str(language_id_filter_cfg.get("target_lang", "en")),
-            backend=str(language_id_filter_cfg.get("backend", "langid")),
-            strict_dependency=bool(language_id_filter_cfg.get("strict_dependency", False)),
-        ),
     )
     if config.dedup_scope not in {"split", "global"}:
         print(f"Unsupported dedup_scope: {config.dedup_scope}. Use 'split' or 'global'.", file=sys.stderr)
         return 4
 
     print("Cleaning splits with leakage-safe dedup...")
-    split_stats, lid_audit, primary_reason_totals = clean_splits(
+    split_stats, audit_meta, primary_reason_totals = clean_splits(
         split_files=split_files,
         output_dir=processed_dir,
         config=config,
         removed_examples_path=removed_examples_path,
         show_progress=True,
     )
-    if lid_audit.get("runtime") != "enabled":
-        print(f"Language ID audit unavailable at runtime: {lid_audit.get('runtime')}")
     for stats in split_stats:
         print(f"Done '{stats.split}': kept {stats.rows_out}/{stats.rows_in} rows")
 
@@ -121,7 +112,7 @@ def main() -> int:
         raw_dir=raw_dir,
         processed_dir=processed_dir,
         config=config,
-        language_id_audit=lid_audit,
+        audit_meta=audit_meta,
         primary_reason_totals=primary_reason_totals,
         removed_examples_path=removed_examples_path,
     )

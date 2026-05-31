@@ -5,7 +5,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.utils.clean_data import CleaningConfig, LanguageIdFilterConfig, clean_splits, normalize_text
+from src.utils.clean_data import CleaningConfig, clean_splits, normalize_text
 
 
 def _write_raw_parquet(path: Path, rows: list[dict]) -> None:
@@ -51,7 +51,6 @@ def test_global_dedup_no_leakage(tmp_path: Path) -> None:
         dedup_scope="global",
         remove_train_pairs_present_in_validation_or_test=True,
         preserve_validation_test_priority=True,
-        language_id_filter=LanguageIdFilterConfig(enabled=False),
     )
 
     split_files = {
@@ -59,15 +58,14 @@ def test_global_dedup_no_leakage(tmp_path: Path) -> None:
         "validation": raw_dir / "validation-00000-of-00001.parquet",
         "test": raw_dir / "test-00000-of-00001.parquet",
     }
-    stats, lid_audit, _reasons = clean_splits(split_files, proc_dir, cfg, removed_path)
+    stats, audit_meta, _reasons = clean_splits(split_files, proc_dir, cfg, removed_path)
     by_split = {s.split: s for s in stats}
 
     assert by_split["validation"].rows_out == 1
     assert by_split["test"].rows_out == 1
     assert by_split["train"].rows_out == 1
     assert by_split["train"].primary_reason_counts["train_pair_present_in_validation_or_test"] == 1
-    assert "language_id_mismatch" not in by_split["train"].primary_reason_counts
-    assert "mismatch_count" in lid_audit
+    assert audit_meta == {}
 
 
 def test_validation_priority_when_duplicate_across_val_test(tmp_path: Path) -> None:
@@ -92,7 +90,6 @@ def test_validation_priority_when_duplicate_across_val_test(tmp_path: Path) -> N
         dedup_scope="global",
         remove_train_pairs_present_in_validation_or_test=False,
         preserve_validation_test_priority=True,
-        language_id_filter=LanguageIdFilterConfig(enabled=False),
     )
 
     split_files = {

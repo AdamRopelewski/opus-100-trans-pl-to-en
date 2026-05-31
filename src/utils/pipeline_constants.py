@@ -1,0 +1,14 @@
+from __future__ import annotations
+
+# Shared defaults to avoid scattering magic numbers.
+
+DEFAULT_MAX_LENGTH_RATIO = 4.0
+
+# LLM audit defaults.
+DEFAULT_LLM_MODEL = "qwen2.5:7b"
+DEFAULT_OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
+DEFAULT_LLM_BATCH_MAX_CHARS = 12000
+DEFAULT_LLM_MAX_ROWS_PER_BATCH = 100
+DEFAULT_LLM_TEMPERATURE = 0.0
+DEFAULT_LLM_MAX_BATCH_RETRIES = 3
+DEFAULT_LLM_UNCERTAIN_RATIO_RERUN_THRESHOLD = 0.4

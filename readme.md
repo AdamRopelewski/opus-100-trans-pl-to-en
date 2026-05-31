@@ -31,29 +31,22 @@ Script:
 
 What it does:
 - Reads train/validation/test raw parquet splits.
-- Computes counts and quality diagnostics:
-  - row counts
-  - null pairs
-  - empty pairs
-  - duplicate pairs
-  - suspicious patterns (HTML/XML, control chars, weird unicode,
-    punctuation-only, very short, numeric mismatch, etc.)
-- Computes length stats (chars/words for PL and EN).
-- Saves deterministic random samples and suspicious samples.
+- Runs pre-audit cleanup first (null/empty removal, duplicate drop, identical drop,
+  min/max words, length-ratio gate).
+- Sends rows to local Ollama LLM in batches.
+- Classifies each row into:
+  - `good`
+  - `bad`
+  - `uncertain` (manual review)
+- Enforces strict JSON response format and ID validation.
+- Retries batch on invalid JSON/ID mismatch and when uncertain ratio is too high.
+- If uncertain stays high after retries, audit stops and asks whether to rerun with higher retries.
 - Writes outputs:
   - `reports/data_audit.md`
   - `reports/data_audit_manifest.json`
-
-Language ID behavior in Stage 1:
-- Always treated as an audit check (never deletes data).
-- Ignores:
-  - very short sentences
-  - rows that are numeric-only or punctuation-only
-- Records mismatch counts and row indices for manual verification.
-
-Why Stage 1 can be slow:
-- Full pass over 1M+ sentence pairs.
-- Per-row Language ID classification is CPU-heavy.
+  - `reports/llm_audit_labels.jsonl`
+  - `reports/llm_audit_batches.jsonl`
+- `reports/llm_bad_sentences.json`
 
 
 ## Stage 2: Cleaning
@@ -126,10 +119,21 @@ python scripts/data_audit.py --config configs/project_config.yaml
 python scripts/clean_data.py --config configs/project_config.yaml
 ```
 
+Verbose audit mode (prints Ollama raw response per batch and first preview rows sent to model):
+
+```bash
+python scripts/data_audit.py --config configs/project_config.yaml --verbose
+```
+
 
 ## Key paths
 
 - Config: `configs/project_config.yaml`
+Ollama requirement:
+
+```bash
+ollama pull qwen2.5:7b
+```
 - Raw data: `data/raw/en-pl`
 - Processed data: `data/processed/en-pl`
 - Reports: `reports/`

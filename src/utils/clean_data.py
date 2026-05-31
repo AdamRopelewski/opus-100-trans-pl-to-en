@@ -5,7 +5,7 @@ import json
 import re
 import unicodedata
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,19 +19,8 @@ try:
 except Exception:  # pragma: no cover
     tqdm = None
 
-from src.utils.language_id import build_language_id_runtime
-
 WHITESPACE_RE = re.compile(r"\s+")
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
-
-
-@dataclass
-class LanguageIdFilterConfig:
-    enabled: bool = False
-    source_lang: str = "pl"
-    target_lang: str = "en"
-    backend: str = "langid"
-    strict_dependency: bool = False
 
 
 @dataclass
@@ -47,7 +36,6 @@ class CleaningConfig:
     dedup_scope: str = "global"
     remove_train_pairs_present_in_validation_or_test: bool = True
     preserve_validation_test_priority: bool = True
-    language_id_filter: LanguageIdFilterConfig = field(default_factory=LanguageIdFilterConfig)
 
 
 @dataclass
@@ -71,10 +59,6 @@ REASON_PRIORITY: list[str] = [
     "train_pair_present_in_validation_or_test",
     "duplicate",
 ]
-
-PUNCT_ONLY_RE = re.compile(r"^[\W_]+$", re.UNICODE)
-NUMBER_RE = re.compile(r"\d+(?:[\.,]\d+)?")
-
 
 def normalize_text(text: str, config: CleaningConfig) -> str:
     out = unicodedata.normalize(config.unicode_normalization, text)
@@ -150,41 +134,6 @@ def _row_reasons(
     return reasons
 
 
-def _is_language_id_skippable(text: str) -> bool:
-    stripped = text.strip()
-    if not stripped:
-        return True
-    if len(stripped.split()) <= 1:
-        return True
-    if PUNCT_ONLY_RE.fullmatch(stripped):
-        return True
-    normalized = NUMBER_RE.sub("", stripped)
-    normalized = re.sub(r"[\W_]+", "", normalized, flags=re.UNICODE)
-    return normalized == ""
-
-
-def _language_id_audit(
-    pl_text: str,
-    en_text: str,
-    lid_detect,
-    expected_pl: str,
-    expected_en: str,
-) -> tuple[bool, list[str]]:
-    if lid_detect is None:
-        return False, ["runtime_unavailable"]
-    skipped: list[str] = []
-    if _is_language_id_skippable(pl_text):
-        skipped.append("source_short_or_numeric_or_punct")
-    if _is_language_id_skippable(en_text):
-        skipped.append("target_short_or_numeric_or_punct")
-    if skipped:
-        return False, skipped
-    pl_lang = lid_detect(pl_text)
-    en_lang = lid_detect(en_text)
-    mismatch = pl_lang not in {expected_pl, "pl"} or en_lang not in {expected_en, "en"}
-    return mismatch, []
-
-
 def _iter_rows(dataset: Dataset):
     for idx, row in enumerate(dataset):
         yield idx, row
@@ -226,12 +175,6 @@ def clean_splits(
 ) -> tuple[list[SplitCleaningStats], dict[str, Any], dict[str, int]]:
     datasets_map = {split: Dataset.from_parquet(str(path)) for split, path in split_files.items()}
 
-    lid_runtime = build_language_id_runtime(
-        config.language_id_filter.enabled,
-        strict_dependency=config.language_id_filter.strict_dependency,
-    )
-    lid_detect = lid_runtime.detect if lid_runtime.enabled else None
-
     val_test_hashes = build_val_test_hashes(datasets_map, config)
     output_dir.mkdir(parents=True, exist_ok=True)
     removed_examples_path.parent.mkdir(parents=True, exist_ok=True)
@@ -247,8 +190,6 @@ def clean_splits(
     global_seen_hashes: set[str] = set()
     split_stats_map: dict[str, SplitCleaningStats] = {}
     primary_totals: Counter[str] = Counter()
-    lid_mismatch_rows: dict[str, list[int]] = {"train": [], "validation": [], "test": []}
-    lid_skipped_counts: Counter[str] = Counter()
 
     with removed_examples_path.open("w", encoding="utf-8") as removed_fp:
         split_iter = process_order
@@ -304,18 +245,6 @@ def clean_splits(
                             val_test_hashes=val_test_hashes,
                         )
 
-                        lid_mismatch, lid_skipped = _language_id_audit(
-                            pl_text=pl_text,
-                            en_text=en_text,
-                            lid_detect=lid_detect,
-                            expected_pl=config.language_id_filter.source_lang,
-                            expected_en=config.language_id_filter.target_lang,
-                        )
-                        if lid_mismatch:
-                            lid_mismatch_rows[split_name].append(row_idx)
-                        if lid_skipped:
-                            lid_skipped_counts.update(lid_skipped)
-
                 if reasons:
                     primary = _pick_primary_reason(reasons)
                     primary_reason_counts[primary] += 1
@@ -354,13 +283,7 @@ def clean_splits(
             )
 
     ordered_stats = [split_stats_map[split] for split in ("train", "validation", "test")]
-    lid_summary: dict[str, Any] = {
-        "runtime": lid_runtime.reason,
-        "mismatch_count": sum(len(v) for v in lid_mismatch_rows.values()),
-        "mismatch_row_indices_by_split": lid_mismatch_rows,
-        "skipped_reason_counts": dict(sorted(lid_skipped_counts.items())),
-    }
-    return ordered_stats, lid_summary, dict(sorted(primary_totals.items()))
+    return ordered_stats, {}, dict(sorted(primary_totals.items()))
 
 
 def create_cleaning_manifest(
@@ -368,7 +291,7 @@ def create_cleaning_manifest(
     raw_dir: Path,
     processed_dir: Path,
     config: CleaningConfig,
-    language_id_audit: dict[str, Any],
+    audit_meta: dict[str, Any],
     primary_reason_totals: dict[str, int],
     removed_examples_path: Path,
 ) -> dict[str, Any]:
@@ -382,7 +305,7 @@ def create_cleaning_manifest(
         "raw_dir": str(raw_dir),
         "processed_dir": str(processed_dir),
         "removed_examples_jsonl": str(removed_examples_path),
-        "language_id_audit": language_id_audit,
+        "audit_meta": audit_meta,
         "config": asdict(config),
         "totals": {
             "rows_in": rows_in_total,
@@ -412,7 +335,7 @@ def write_cleaning_report_markdown(manifest: dict[str, Any], out_path: Path) -> 
     lines.append(f"Raw directory: `{manifest['raw_dir']}`")
     lines.append(f"Processed directory: `{manifest['processed_dir']}`")
     lines.append(f"Removed examples JSONL: `{manifest['removed_examples_jsonl']}`")
-    lines.append(f"Language ID audit: `{manifest['language_id_audit']}`")
+    lines.append(f"Audit metadata: `{manifest['audit_meta']}`")
     lines.append("")
     lines.append("## Config")
     lines.append("")

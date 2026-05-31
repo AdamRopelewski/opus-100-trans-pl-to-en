@@ -4,6 +4,5 @@ torchvision
 datasets
 pyarrow
 pyyaml
-langid
 pytest
 tqdm

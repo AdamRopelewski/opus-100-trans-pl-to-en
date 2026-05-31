@@ -147,7 +147,6 @@ Tasks:
 Outputs:
 - Script: `scripts/data_audit.py`.
 - Utility module: `src/utils/data_audit.py`.
-- Optional language-id runtime helper: `src/utils/language_id.py`.
 - Report: `reports/data_audit.md`.
 - Manifest: `reports/data_audit_manifest.json`.
 
@@ -196,7 +195,6 @@ Tasks:
 Outputs:
 - Script: `scripts/clean_data.py`.
 - Utility module: `src/utils/clean_data.py`.
-- Optional language-id runtime helper: `src/utils/language_id.py`.
 - Clean dataset files in `data/processed/en-pl/`.
 - Cleaning summary report: `reports/cleaning_report.md`.
 - Cleaning manifest: `reports/cleaning_manifest.json`.

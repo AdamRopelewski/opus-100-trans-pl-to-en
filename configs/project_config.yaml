@@ -21,27 +21,27 @@ dataset:
 
 stage1_audit:
   enabled: true
-  samples_per_split: 100
-  language_id:
-    backend: langid
-    strict_dependency: false
-    max_rows: 20000
+  samples_per_split: 200
+  preaudit:
+    deduplicate_pairs: true
+    remove_identical_pairs: true
+    remove_square_bracket_content: true
+    min_words: 1
+    max_words: 200
+    max_length_ratio: 4.0
+  llm:
+    model: qwen2.5:7b
+    endpoint: http://localhost:11434/api/generate
+    batch_max_chars: 20000
+    max_rows_per_batch: 200
+    temperature: 0.0
+    max_batch_retries: 2
+    uncertain_ratio_rerun_threshold: 0.9
+    verbose: false
+    verbose_preview_rows: 10
   outputs:
     report_md: reports/data_audit.md
     manifest_json: reports/data_audit_manifest.json
-  checks:
-    null_pairs: true
-    empty_pairs: true
-    duplicate_pairs: true
-    language_id: true
-    identical_source_target: true
-    html_xml_tags: true
-    weird_unicode: true
-    control_chars: true
-    numeric_mismatch: true
-    punctuation_only: true
-    very_short_pairs: true
-    length_stats: true
 
 stage2_cleaning:
   enabled: true
@@ -52,14 +52,8 @@ stage2_cleaning:
     remove_control_chars: true
     min_words: 1
     max_words: 200
-    max_length_ratio: 3.0
+    max_length_ratio: 4.0
     remove_identical_pairs: true
-    language_id_filter:
-      enabled: true
-      source_lang: pl
-      target_lang: en
-      backend: langid
-      strict_dependency: false
     dedup_scope: global
     remove_train_pairs_present_in_validation_or_test: true
     preserve_validation_test_priority: true
