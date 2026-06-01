@@ -54,6 +54,10 @@ class UncertainBatchError(RuntimeError):
     pass
 
 
+LABEL_TO_INT = {"bad": 0, "uncertain": 1, "good": 2}
+INT_TO_LABEL = {0: "bad", 1: "uncertain", 2: "good"}
+
+
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
@@ -61,6 +65,29 @@ def _normalize_text(text: str) -> str:
 def _strip_square_bracket_content(text: str) -> str:
     # Remove subtitle-like cues such as [SIGHS], [MUSIC], [APPLAUSE]
     return re.sub(r"\[[^\]]*\]", " ", text)
+
+
+_ALNUM_PL_EN = "A-Za-z0-9ĄąĆćĘęŁłŃńÓóŚśŹźŻż"
+
+
+def _sanitize_preaudit_text(text: str) -> str:
+    out = text
+    # Normalize leading whitespace and dialogue markers.
+    out = out.lstrip()
+    out = re.sub(r"^[\-*\s]+", "", out)
+
+    # Keep ellipsis only at end, preceded by letter/digit.
+    out = re.sub(rf"(?<![{_ALNUM_PL_EN}])\.{{3}}", " ", out)
+    out = re.sub(rf"\.{{3}}(?!\s*$)", " ", out)
+
+    # Remove all characters except plain text whitelist.
+    out = re.sub(rf"[^ {_ALNUM_PL_EN}\-\?,\.:;'!]", " ", out)
+
+    # Keep '-' only when between letters/digits.
+    out = re.sub(rf"(?<![{_ALNUM_PL_EN}])-(?=[{_ALNUM_PL_EN}]|\s|$)", " ", out)
+    out = re.sub(rf"(?<=[{_ALNUM_PL_EN}])-(?![{_ALNUM_PL_EN}])", " ", out)
+
+    return out
 
 
 def _pair_key(pl: str, en: str) -> str:
@@ -101,6 +128,8 @@ def _preaudit_filter_rows(
         if cfg.remove_square_bracket_content:
             pl = _strip_square_bracket_content(pl)
             en = _strip_square_bracket_content(en)
+        pl = _sanitize_preaudit_text(pl)
+        en = _sanitize_preaudit_text(en)
         pl = _normalize_text(pl)
         en = _normalize_text(en)
         if not pl or not en:
@@ -227,12 +256,59 @@ def _needs_rerun(valid: dict[str, list[int]], threshold: float) -> bool:
     return uncertain_ratio > threshold
 
 
+def _parse_label_entry(line: str) -> tuple[str, int, str] | None:
+    try:
+        obj = json.loads(line)
+    except Exception:
+        return None
+
+    if not isinstance(obj, dict):
+        return None
+
+    # Compact format: {"s":"split","i":123,"l":2}
+    if "s" in obj and "i" in obj and "l" in obj:
+        split = str(obj["s"])
+        row_index = int(obj["i"])
+        label = INT_TO_LABEL.get(int(obj["l"]))
+        if label is None:
+            return None
+        return split, row_index, label
+
+    # Legacy format compatibility: {"split":"...","row_index":123,"label":"good"}
+    if "split" in obj and "row_index" in obj and "label" in obj:
+        split = str(obj["split"])
+        row_index = int(obj["row_index"])
+        label = str(obj["label"])
+        if label not in LABEL_TO_INT:
+            return None
+        return split, row_index, label
+
+    return None
+
+
+def _parse_batch_entry(line: str) -> tuple[str, int, int] | None:
+    try:
+        obj = json.loads(line)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    try:
+        split = str(obj["split"])
+        batch_index = int(obj["batch_index"])
+        size = int(obj["size"])
+    except Exception:
+        return None
+    return split, batch_index, size
+
+
 def run_stage1_llm_audit(
     split_files: dict[str, Path],
     cfg: LlmAuditConfig,
     reports_dir: Path,
     preaudit_cfg: PreAuditConfig,
     show_progress: bool = True,
+    resume: bool = False,
 ) -> dict[str, Any]:
     reports_dir.mkdir(parents=True, exist_ok=True)
     labels_path = reports_dir / "llm_audit_labels.jsonl"
@@ -242,17 +318,128 @@ def run_stage1_llm_audit(
     batches_by_split_paths = {s: reports_dir / f"llm_audit_batches_{s}.jsonl" for s in split_files}
     bad_by_split_paths = {s: reports_dir / f"llm_bad_sentences_{s}.json" for s in split_files}
 
+    processed_ids_by_split: dict[str, set[int]] = {s: set() for s in split_files}
+    recovered_counts_by_split: dict[str, Counter[str]] = {s: Counter() for s in split_files}
     totals = Counter()
     total_preaudit_dropped: Counter[str] = Counter()
     split_stats: list[dict[str, Any]] = []
     all_bad_records: list[dict[str, Any]] = []
     bad_records_by_split: dict[str, list[dict[str, Any]]] = {s: [] for s in split_files}
 
-    for split_name in split_files:
-        labels_by_split_paths[split_name].write_text("", encoding="utf-8")
-        batches_by_split_paths[split_name].write_text("", encoding="utf-8")
+    resume_from_split: str | None = None
+    resume_from_batch_index: int | None = None
 
-    with labels_path.open("w", encoding="utf-8") as labels_fp, batches_path.open("w", encoding="utf-8") as batches_fp:
+    if resume:
+        if not labels_path.exists():
+            raise FileNotFoundError(f"Resume requested, but labels file not found: {labels_path}")
+        if not batches_path.exists():
+            raise FileNotFoundError(f"Resume requested, but batches file not found: {batches_path}")
+
+        old_lines = [ln for ln in labels_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        old_batch_lines = [ln for ln in batches_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+        if not old_lines:
+            raise ValueError(f"Resume requested, but labels file is empty: {labels_path}")
+        if not old_batch_lines:
+            raise ValueError(f"Resume requested, but batches file is empty: {batches_path}")
+
+        last_batch = _parse_batch_entry(old_batch_lines[-1])
+        if last_batch is None:
+            raise ValueError("Resume requested, but last batches entry is invalid JSON schema")
+        last_split, last_batch_index, last_batch_size = last_batch
+
+        # Drop last batch log line so this batch is redone.
+        old_batch_lines = old_batch_lines[:-1]
+        batches_path.write_text(("\n".join(old_batch_lines) + ("\n" if old_batch_lines else "")), encoding="utf-8")
+
+        # Drop last batch_size label lines for matching split from the end.
+        removed = 0
+        kept_reversed: list[str] = []
+        for line in reversed(old_lines):
+            parsed = _parse_label_entry(line)
+            if parsed is not None and parsed[0] == last_split and removed < last_batch_size:
+                removed += 1
+                continue
+            kept_reversed.append(line)
+        old_lines = list(reversed(kept_reversed))
+
+        if removed == 0:
+            raise ValueError(
+                f"Resume requested, but no labels removed for last batch split={last_split}, batch={last_batch_index}"
+            )
+
+        labels_path.write_text(("\n".join(old_lines) + ("\n" if old_lines else "")), encoding="utf-8")
+        _log(
+            f"[audit][resume] Rewinding split={last_split} batch={last_batch_index} "
+            f"by removing {removed} label rows and last batch log entry"
+        )
+        resume_from_split = last_split
+        resume_from_batch_index = last_batch_index
+
+        for line in old_lines:
+            parsed = _parse_label_entry(line)
+            if parsed is None:
+                continue
+            split, row_index, label = parsed
+            if split not in processed_ids_by_split:
+                continue
+            if row_index in processed_ids_by_split[split]:
+                continue
+            processed_ids_by_split[split].add(row_index)
+            recovered_counts_by_split[split][label] += 1
+            totals[label] += 1
+
+            if label == "bad":
+                bad_rec = {
+                    "split": split,
+                    "row_index": int(row_index),
+                    "pl": None,
+                    "en": None,
+                }
+                all_bad_records.append(bad_rec)
+                bad_records_by_split[split].append(bad_rec)
+
+        for split_name in split_files:
+            # Rebuild per-split compact file from global labels after truncation.
+            compact_rows: list[str] = []
+            for line in old_lines:
+                parsed = _parse_label_entry(line)
+                if parsed is None:
+                    continue
+                line_split, row_index, label = parsed
+                if line_split != split_name:
+                    continue
+                compact_rows.append(
+                    json.dumps(
+                        {"i": row_index, "l": LABEL_TO_INT[label]},
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    )
+                )
+            labels_by_split_paths[split_name].write_text(
+                "\n".join(compact_rows) + ("\n" if compact_rows else ""),
+                encoding="utf-8",
+            )
+            split_batch_rows: list[str] = []
+            for line in old_batch_lines:
+                parsed_batch = _parse_batch_entry(line)
+                if parsed_batch is None:
+                    continue
+                if parsed_batch[0] != split_name:
+                    continue
+                split_batch_rows.append(line)
+            batches_by_split_paths[split_name].write_text(
+                "\n".join(split_batch_rows) + ("\n" if split_batch_rows else ""),
+                encoding="utf-8",
+            )
+    else:
+        for split_name in split_files:
+            labels_by_split_paths[split_name].write_text("", encoding="utf-8")
+            batches_by_split_paths[split_name].write_text("", encoding="utf-8")
+
+    labels_mode = "a" if resume else "w"
+    batches_mode = "a" if resume else "w"
+    with labels_path.open(labels_mode, encoding="utf-8") as labels_fp, batches_path.open(batches_mode, encoding="utf-8") as batches_fp:
         split_items = list(split_files.items())
         split_iter = split_items
         if show_progress and tqdm is not None:
@@ -269,7 +456,7 @@ def run_stage1_llm_audit(
             total_preaudit_dropped.update(preaudit_dropped)
 
             batches = _build_batches(rows, max_chars=cfg.batch_max_chars, max_rows=cfg.max_rows_per_batch)
-            split_counter = Counter()
+            split_counter = Counter(recovered_counts_by_split[split])
             batch_iter = enumerate(batches)
             if show_progress and tqdm is not None:
                 batch_iter = enumerate(
@@ -281,7 +468,23 @@ def run_stage1_llm_audit(
                         leave=False,
                     )
                 )
+
+            start_batch_index = 0
+            if resume_from_split is not None and resume_from_batch_index is not None:
+                split_order = list(split_files.keys())
+                resume_split_pos = split_order.index(resume_from_split)
+                current_split_pos = split_order.index(split)
+                if current_split_pos < resume_split_pos:
+                    continue
+                if current_split_pos == resume_split_pos:
+                    start_batch_index = resume_from_batch_index
+
+            if start_batch_index > 0 and cfg.verbose:
+                _log(f"[audit][{split}] resume start from batch_index={start_batch_index}")
+
             for bidx, batch in batch_iter:
+                if bidx < start_batch_index:
+                    continue
                 if cfg.verbose:
                     _log(f"[audit][{split}] batch {bidx + 1}/{len(batches)} size={len(batch)}")
                     preview_n = max(0, min(cfg.verbose_preview_rows, len(batch)))
@@ -388,19 +591,26 @@ def run_stage1_llm_audit(
                     label = per_id.get(rec["row_index"], "uncertain")
                     split_counter[label] += 1
                     totals[label] += 1
-                    out = {
-                        "split": split,
-                        "row_index": rec["row_index"],
-                        "label": label,
-                        "pl": rec["pl"],
-                        "en": rec["en"],
-                    }
-                    labels_fp.write(json.dumps(out, ensure_ascii=True) + "\n")
+                    out = {"s": split, "i": int(rec["row_index"]), "l": LABEL_TO_INT[label]}
+                    labels_fp.write(json.dumps(out, ensure_ascii=True, separators=(",", ":")) + "\n")
                     with labels_by_split_paths[split].open("a", encoding="utf-8") as split_labels_fp:
-                        split_labels_fp.write(json.dumps(out, ensure_ascii=True) + "\n")
+                        split_labels_fp.write(
+                            json.dumps(
+                                {"i": int(rec["row_index"]), "l": LABEL_TO_INT[label]},
+                                ensure_ascii=True,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        )
                     if label == "bad":
-                        all_bad_records.append(out)
-                        bad_records_by_split[split].append(out)
+                        bad_rec = {
+                            "split": split,
+                            "row_index": int(rec["row_index"]),
+                            "pl": rec["pl"],
+                            "en": rec["en"],
+                        }
+                        all_bad_records.append(bad_rec)
+                        bad_records_by_split[split].append(bad_rec)
 
                 if cfg.verbose:
                     _log(

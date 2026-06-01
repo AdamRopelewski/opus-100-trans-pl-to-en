@@ -1,4 +1,5 @@
 - stage1 audit: tune uncertain threshold and retry count on a small subset first
-- stage2 use reports from stage1 so we dont recompute just create the clensed DS
+- stage2: consume stage1 labels (keep good, review uncertain) and avoid repeating stage1 heuristics
+- stage2: share sanitizer with stage1 and keep only lightweight final normalization
 - config hygiene: keep all runtime thresholds centralized in project config
 - tests: add unit coverage for llm_audit validation/retry/artifact writing

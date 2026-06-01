@@ -55,8 +55,13 @@ What it does:
     - `reports/llm_audit_batches_test.jsonl`
     - `reports/llm_audit_batches_train.jsonl`
     - `reports/llm_bad_sentences_validation.json`
-    - `reports/llm_bad_sentences_test.json`
-    - `reports/llm_bad_sentences_train.json`
+  - `reports/llm_bad_sentences_test.json`
+  - `reports/llm_bad_sentences_train.json`
+
+Label JSONL format is compact to keep files small:
+- global labels file: `{"s":"split","i":row_index,"l":label_id}`
+- per-split labels file: `{"i":row_index,"l":label_id}`
+- label ids: `0=bad`, `1=uncertain`, `2=good`
 
 
 ## Stage 2: Cleaning

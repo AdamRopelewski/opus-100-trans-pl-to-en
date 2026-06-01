@@ -31,6 +31,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Audit local OPUS-100 en-pl parquet splits with local Ollama LLM.")
     parser.add_argument("--config", type=Path, default=Path("configs/project_config.yaml"), help="Path to project config YAML.")
     parser.add_argument("--verbose", action="store_true", help="Verbose mode: print Ollama responses and batch preview rows.")
+    parser.add_argument("--resume", action="store_true", help="Resume from labels JSONL by removing its last line and continuing.")
     return parser
 
 
@@ -121,6 +122,7 @@ def main() -> int:
         max_words=int(get_nested(config, "stage1_audit.preaudit.max_words", 200)),
         max_length_ratio=float(get_nested(config, "stage1_audit.preaudit.max_length_ratio", 4.0)),
     )
+    resume_mode = bool(args.resume)
     while True:
         try:
             manifest = run_stage1_llm_audit(
@@ -129,6 +131,7 @@ def main() -> int:
                 reports_dir=reports_dir,
                 preaudit_cfg=preaudit_cfg,
                 show_progress=True,
+                resume=resume_mode,
             )
             break
         except UncertainBatchError as exc:
@@ -137,6 +140,7 @@ def main() -> int:
             if answer != "y":
                 return 5
             llm_cfg.max_batch_retries += 1
+            resume_mode = False
             print(f"Retrying full audit with max_batch_retries={llm_cfg.max_batch_retries}...")
 
     write_llm_audit_report(manifest, out_md=report_path, out_json=manifest_path)
