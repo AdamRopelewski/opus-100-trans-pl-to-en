@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +13,6 @@ from src.utils.config import get_nested, load_config
 from src.utils.llm_audit import (
     LlmAuditConfig,
     PreAuditConfig,
-    UncertainBatchError,
     run_stage1_llm_audit,
     write_llm_audit_report,
 )
@@ -63,16 +63,8 @@ def main() -> int:
         return 0
 
     data_dir = paths_cfg["raw_data_dir"]
-    report_path = Path(
-        get_nested(config, "stage1_audit.outputs.report_md", str(paths_cfg["reports_dir"] / "data_audit.md"))
-    )
-    manifest_path = Path(
-        get_nested(
-            config,
-            "stage1_audit.outputs.manifest_json",
-            str(paths_cfg["reports_dir"] / "data_audit_manifest.json"),
-        )
-    )
+    report_name = Path(get_nested(config, "stage1_audit.outputs.report_md", "data_audit.md")).name
+    manifest_name = Path(get_nested(config, "stage1_audit.outputs.manifest_json", "data_audit_manifest.json")).name
 
     split_patterns = {
         "validation": str(get_nested(config, "dataset.splits.validation_pattern", "validation-*.parquet")),
@@ -111,7 +103,29 @@ def main() -> int:
         verbose_preview_rows=int(get_nested(config, "stage1_audit.llm.verbose_preview_rows", 10)),
     )
 
-    reports_dir = paths_cfg["reports_dir"]
+    reports_root_dir = paths_cfg["reports_dir"]
+    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    reports_dir = reports_root_dir if args.resume else reports_root_dir / f"llm_audit_{run_tag}"
+
+    if args.resume:
+        root_labels = reports_root_dir / "llm_audit_labels.jsonl"
+        if not root_labels.exists():
+            candidates = sorted(
+                [
+                    p
+                    for p in reports_root_dir.glob("llm_audit_*")
+                    if p.is_dir() and (p / "llm_audit_labels.jsonl").exists()
+                ],
+                key=lambda p: p.name,
+            )
+            if candidates:
+                reports_dir = candidates[-1]
+                print(f"Resume auto-selected latest audit dir: {reports_dir}")
+
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    report_path = reports_dir / report_name
+    manifest_path = reports_dir / manifest_name
     preaudit_cfg = PreAuditConfig(
         deduplicate_pairs=bool(get_nested(config, "stage1_audit.preaudit.deduplicate_pairs", True)),
         remove_identical_pairs=bool(get_nested(config, "stage1_audit.preaudit.remove_identical_pairs", True)),
@@ -122,26 +136,14 @@ def main() -> int:
         max_words=int(get_nested(config, "stage1_audit.preaudit.max_words", 200)),
         max_length_ratio=float(get_nested(config, "stage1_audit.preaudit.max_length_ratio", 4.0)),
     )
-    resume_mode = bool(args.resume)
-    while True:
-        try:
-            manifest = run_stage1_llm_audit(
-                split_files=split_files,
-                cfg=llm_cfg,
-                reports_dir=reports_dir,
-                preaudit_cfg=preaudit_cfg,
-                show_progress=True,
-                resume=resume_mode,
-            )
-            break
-        except UncertainBatchError as exc:
-            print(str(exc), file=sys.stderr)
-            answer = input("High uncertain batch detected. Increase retries and continue? [y/N]: ").strip().lower()
-            if answer != "y":
-                return 5
-            llm_cfg.max_batch_retries += 1
-            resume_mode = False
-            print(f"Retrying full audit with max_batch_retries={llm_cfg.max_batch_retries}...")
+    manifest = run_stage1_llm_audit(
+        split_files=split_files,
+        cfg=llm_cfg,
+        reports_dir=reports_dir,
+        preaudit_cfg=preaudit_cfg,
+        show_progress=True,
+        resume=bool(args.resume),
+    )
 
     write_llm_audit_report(manifest, out_md=report_path, out_json=manifest_path)
 

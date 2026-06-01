@@ -13,3 +13,6 @@ data/processed/en-pl/*.parquet
 
 models/
 !models/.gitkeep
+
+reports/*
+!reports/.gitkeep

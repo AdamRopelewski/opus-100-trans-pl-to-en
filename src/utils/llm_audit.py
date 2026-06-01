@@ -556,11 +556,6 @@ def run_stage1_llm_audit(
                         + "\n"
                     )
 
-                if uncertain_triggered and _needs_rerun(valid, cfg.uncertain_ratio_rerun_threshold):
-                    raise UncertainBatchError(
-                        f"High uncertain ratio remained after retries for split={split}, batch={bidx}. "
-                        f"Uncertain={len(valid['uncertain'])}/{len(batch)}"
-                    )
                 per_id = {}
                 for label in ("good", "bad", "uncertain"):
                     for local_id in valid[label]:
