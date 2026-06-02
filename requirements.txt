@@ -5,4 +5,5 @@ datasets
 pyarrow
 pyyaml
 pytest
+sentencepiece
 tqdm

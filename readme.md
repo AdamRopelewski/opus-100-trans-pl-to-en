@@ -164,5 +164,6 @@ ollama pull qwen2.5:7b
 - Implementation plan: `PL_EN_Transformer_Implementation_Plan.md`
 
 Note on config scope:
-- `stage3_tokenizer` through `stage7_eval` and `smoke` are placeholders for planned stages.
-- Only Stage 1 and Stage 2 are implemented in code right now.
+- `stage3_tokenizer` trains a shared SentencePiece BPE tokenizer and writes `reports/tokenizer_stats.md`.
+- `stage4_dataloader` through `stage7_eval` and `smoke` are placeholders for planned stages.
+- Stage 1 through Stage 3 are implemented in code right now.
