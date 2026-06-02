@@ -140,13 +140,13 @@ Tasks:
   - punctuation-only pairs
   - very short pairs
   - numeric mismatch between source and target
-  - optional language-id mismatch
+  - optional LLM uncertain/manual-review bucket
 - Save deterministic random samples and suspicious samples using seed from config.
 - Save markdown report and JSON manifest.
 
 Outputs:
 - Script: `scripts/data_audit.py`.
-- Utility module: `src/utils/data_audit.py`.
+- Utility module: `src/utils/llm_audit.py`.
 - Report: `reports/data_audit.md`.
 - Manifest: `reports/data_audit_manifest.json`.
 
@@ -179,7 +179,7 @@ Tasks:
   - min/max words
   - source/target length ratio
   - identical source-target
-  - optional language-id mismatch
+  - no language-id filter in Stage 2
 - Deduplicate on normalized `(source, target)` hash.
 - Support `dedup_scope=global` with leakage protection:
   - process validation/test before train if `preserve_validation_test_priority=true`
@@ -434,7 +434,8 @@ dataset:
     test_pattern: test-*.parquet
 
 stage1_audit:
-  samples_per_split: 5
+  llm:
+    max_rows_per_batch: 200
   outputs:
     report_md: reports/data_audit.md
     manifest_json: reports/data_audit_manifest.json

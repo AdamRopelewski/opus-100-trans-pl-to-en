@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -11,8 +12,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.utils.config import get_nested, load_config
 from src.utils.llm_audit import (
     LlmAuditConfig,
-    PreAuditConfig,
-    UncertainBatchError,
     run_stage1_llm_audit,
     write_llm_audit_report,
 )
@@ -25,12 +24,14 @@ from src.utils.pipeline_constants import (
     DEFAULT_LLM_UNCERTAIN_RATIO_RERUN_THRESHOLD,
     DEFAULT_OLLAMA_ENDPOINT,
 )
+from src.utils.preaudit import PreAuditConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Audit local OPUS-100 en-pl parquet splits with local Ollama LLM.")
     parser.add_argument("--config", type=Path, default=Path("configs/project_config.yaml"), help="Path to project config YAML.")
     parser.add_argument("--verbose", action="store_true", help="Verbose mode: print Ollama responses and batch preview rows.")
+    parser.add_argument("--resume", action="store_true", help="Resume from labels JSONL by removing its last line and continuing.")
     return parser
 
 
@@ -47,13 +48,23 @@ def main() -> int:
     args = _build_parser().parse_args()
     config = load_config(args.config)
 
+    paths_cfg = {
+        "raw_data_dir": Path(get_nested(config, "paths.raw_data_dir", "data/raw/en-pl")),
+        "processed_data_dir": Path(get_nested(config, "paths.processed_data_dir", "data/processed/en-pl")),
+        "reports_dir": Path(get_nested(config, "paths.reports_dir", "reports")),
+        "tokenizer_dir": Path(get_nested(config, "paths.tokenizer_dir", "tokenizers")),
+        "checkpoints_dir": Path(get_nested(config, "paths.checkpoints_dir", "checkpoints")),
+        "logs_dir": Path(get_nested(config, "paths.logs_dir", "logs")),
+        "translations_dir": Path(get_nested(config, "paths.translations_dir", "reports/translations")),
+    }
+
     if not bool(get_nested(config, "stage1_audit.enabled", True)):
         print("stage1_audit.enabled is false, skipping audit.")
         return 0
 
-    data_dir = Path(get_nested(config, "paths.raw_data_dir", "data/raw/en-pl"))
-    report_path = Path(get_nested(config, "stage1_audit.outputs.report_md", "reports/data_audit.md"))
-    manifest_path = Path(get_nested(config, "stage1_audit.outputs.manifest_json", "reports/data_audit_manifest.json"))
+    data_dir = paths_cfg["raw_data_dir"]
+    report_name = Path(get_nested(config, "stage1_audit.outputs.report_md", "data_audit.md")).name
+    manifest_name = Path(get_nested(config, "stage1_audit.outputs.manifest_json", "data_audit_manifest.json")).name
 
     split_patterns = {
         "validation": str(get_nested(config, "dataset.splits.validation_pattern", "validation-*.parquet")),
@@ -92,7 +103,29 @@ def main() -> int:
         verbose_preview_rows=int(get_nested(config, "stage1_audit.llm.verbose_preview_rows", 10)),
     )
 
-    reports_dir = Path(get_nested(config, "paths.reports_dir", "reports"))
+    reports_root_dir = paths_cfg["reports_dir"]
+    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    reports_dir = reports_root_dir if args.resume else reports_root_dir / f"llm_audit_{run_tag}"
+
+    if args.resume:
+        root_labels = reports_root_dir / "llm_audit_labels.jsonl"
+        if not root_labels.exists():
+            candidates = sorted(
+                [
+                    p
+                    for p in reports_root_dir.glob("llm_audit_*")
+                    if p.is_dir() and (p / "llm_audit_labels.jsonl").exists()
+                ],
+                key=lambda p: p.name,
+            )
+            if candidates:
+                reports_dir = candidates[-1]
+                print(f"Resume auto-selected latest audit dir: {reports_dir}")
+
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    report_path = reports_dir / report_name
+    manifest_path = reports_dir / manifest_name
     preaudit_cfg = PreAuditConfig(
         deduplicate_pairs=bool(get_nested(config, "stage1_audit.preaudit.deduplicate_pairs", True)),
         remove_identical_pairs=bool(get_nested(config, "stage1_audit.preaudit.remove_identical_pairs", True)),
@@ -103,23 +136,14 @@ def main() -> int:
         max_words=int(get_nested(config, "stage1_audit.preaudit.max_words", 200)),
         max_length_ratio=float(get_nested(config, "stage1_audit.preaudit.max_length_ratio", 4.0)),
     )
-    while True:
-        try:
-            manifest = run_stage1_llm_audit(
-                split_files=split_files,
-                cfg=llm_cfg,
-                reports_dir=reports_dir,
-                preaudit_cfg=preaudit_cfg,
-                show_progress=True,
-            )
-            break
-        except UncertainBatchError as exc:
-            print(str(exc), file=sys.stderr)
-            answer = input("High uncertain batch detected. Increase retries and continue? [y/N]: ").strip().lower()
-            if answer != "y":
-                return 5
-            llm_cfg.max_batch_retries += 1
-            print(f"Retrying full audit with max_batch_retries={llm_cfg.max_batch_retries}...")
+    manifest = run_stage1_llm_audit(
+        split_files=split_files,
+        cfg=llm_cfg,
+        reports_dir=reports_dir,
+        preaudit_cfg=preaudit_cfg,
+        show_progress=True,
+        resume=bool(args.resume),
+    )
 
     write_llm_audit_report(manifest, out_md=report_path, out_json=manifest_path)
 
@@ -127,6 +151,11 @@ def main() -> int:
     print(f"Wrote manifest: {manifest_path}")
     print(f"Wrote labels: {manifest['artifacts']['labels_jsonl']}")
     print(f"Wrote bad sentences: {manifest['artifacts']['bad_json']}")
+    for split in ("validation", "test", "train"):
+        if split in manifest["artifacts"].get("labels_jsonl_by_split", {}):
+            print(f"Wrote labels ({split}): {manifest['artifacts']['labels_jsonl_by_split'][split]}")
+            print(f"Wrote batches ({split}): {manifest['artifacts']['batches_jsonl_by_split'][split]}")
+            print(f"Wrote bad ({split}): {manifest['artifacts']['bad_json_by_split'][split]}")
     return 0
 
 
