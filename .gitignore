@@ -16,3 +16,8 @@ models/
 
 reports/*
 !reports/.gitkeep
+!reports/tokenizer_stats.md
+
+tokenizers/*.txt
+tokenizers/*.model
+!tokenizers/.gitkeep

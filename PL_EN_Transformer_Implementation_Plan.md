@@ -42,7 +42,7 @@ Architecture:
 
 Tokenization:
 - Shared SentencePiece (or BPE) vocabulary for both languages.
-- `vocab_size = 32000`
+- `vocab_size = 16000` initial run; compare with 24000/32000 if common long words split too much.
 - Special tokens: `PAD`, `BOS`, `EOS`, `UNK`.
 
 Training settings (starting point):
@@ -213,15 +213,14 @@ Status:
 ## Stage 3 - Tokenizer Training
 
 Implementation note:
-- Not implemented in code yet.
-- Config stays prepared for SentencePiece training in a future step.
+- Implemented with a shared SentencePiece BPE tokenizer and validation stats report.
 
 Objective:
 - Train a shared subword tokenizer suitable for Polish morphology and English output.
 
 Tasks:
 - Build training text from cleaned `pl` and `en`.
-- Train SentencePiece/BPE tokenizer with `vocab_size=32000`.
+- Train SentencePiece/BPE tokenizer with initial `vocab_size=16000`.
 - Define and lock special token IDs.
 - Save tokenizer config and model files.
 
@@ -233,9 +232,10 @@ Outputs:
 Acceptance checks:
 - Tokenization and detokenization are stable.
 - Unknown token rate is low on validation split.
+- Common long words split less than rare long words in `reports/tokenizer_stats.md`.
 
 Status:
-- Planned only (not implemented yet).
+- Implemented in `scripts/train_tokenizer.py` and `src/utils/tokenizer.py`.
 
 ---
 
