@@ -14,6 +14,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Dataset
 
+from src.utils.preaudit import PreAuditConfig, preaudit_filter_rows
+
 try:
     from tqdm.auto import tqdm
 except Exception:  # pragma: no cover
@@ -162,6 +164,43 @@ def build_val_test_hashes(
     return hashes
 
 
+def load_llm_audit_labels(labels_path: Path) -> tuple[dict[str, dict[int, int]], dict[str, int]]:
+    labels: dict[str, dict[int, int]] = {"train": {}, "validation": {}, "test": {}}
+    stats: Counter[str] = Counter()
+    for line_number, line in enumerate(labels_path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        split = str(obj["s"])
+        row_index = int(obj["i"])
+        label = int(obj["l"])
+        if split not in labels:
+            stats["unknown_split"] += 1
+            continue
+        if row_index in labels[split]:
+            stats["duplicate_label"] += 1
+            stats[f"duplicate_label_{split}"] += 1
+        labels[split][row_index] = label
+        stats["labels_loaded"] += 1
+        stats[f"labels_loaded_{split}"] += 1
+    return labels, dict(sorted(stats.items()))
+
+
+def _build_val_test_hashes_from_rows(
+    rows_by_split: dict[str, list[dict[str, Any]]],
+    config: CleaningConfig,
+) -> set[str]:
+    hashes: set[str] = set()
+    for split_name in ("validation", "test"):
+        for row in rows_by_split[split_name]:
+            pl_text = normalize_text(str(row["pl"]), config)
+            en_text = normalize_text(str(row["en"]), config)
+            if not pl_text or not en_text:
+                continue
+            hashes.add(pair_hash(pl_text, en_text))
+    return hashes
+
+
 def _write_removed_example(fp, payload: dict[str, Any]) -> None:
     fp.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
@@ -172,8 +211,160 @@ def clean_splits(
     config: CleaningConfig,
     removed_examples_path: Path,
     show_progress: bool = True,
+    preaudit_config: PreAuditConfig | None = None,
+    llm_labels_by_split: dict[str, dict[int, int]] | None = None,
+    accepted_llm_labels: set[int] | None = None,
 ) -> tuple[list[SplitCleaningStats], dict[str, Any], dict[str, int]]:
     datasets_map = {split: Dataset.from_parquet(str(path)) for split, path in split_files.items()}
+
+    if llm_labels_by_split is not None:
+        accepted_labels = accepted_llm_labels or {2}
+        preaudit_cfg = preaudit_config or PreAuditConfig()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        removed_examples_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if config.dedup_scope == "global":
+            if config.preserve_validation_test_priority:
+                process_order = ["validation", "test", "train"]
+            else:
+                process_order = ["train", "validation", "test"]
+        else:
+            process_order = ["train", "validation", "test"]
+
+        rows_by_split: dict[str, list[dict[str, Any]]] = {}
+        split_stats_map: dict[str, SplitCleaningStats] = {}
+        split_primary_counts: dict[str, Counter[str]] = {s: Counter() for s in ("train", "validation", "test")}
+        primary_totals: Counter[str] = Counter()
+        audit_meta: dict[str, Any] = {
+            "llm_filter_enabled": True,
+            "accepted_llm_labels": sorted(accepted_labels),
+        }
+
+        with removed_examples_path.open("w", encoding="utf-8") as removed_fp:
+            for split_name in ("train", "validation", "test"):
+                rows, preaudit_dropped = preaudit_filter_rows(
+                    datasets_map[split_name],
+                    preaudit_cfg,
+                    split_name=split_name,
+                    show_progress=show_progress,
+                )
+                for reason, count in preaudit_dropped.items():
+                    preaudit_reason = f"preaudit_{reason}"
+                    split_primary_counts[split_name][preaudit_reason] += count
+                    primary_totals[preaudit_reason] += count
+
+                labels = llm_labels_by_split.get(split_name, {})
+                kept_rows: list[dict[str, Any]] = []
+                missing_labels = 0
+                label_not_kept = 0
+                for row in rows:
+                    row_index = int(row["row_index"])
+                    label = labels.get(row_index)
+                    if label is None:
+                        missing_labels += 1
+                        split_primary_counts[split_name]["missing_llm_label"] += 1
+                        primary_totals["missing_llm_label"] += 1
+                        _write_removed_example(
+                            removed_fp,
+                            {
+                                "split": split_name,
+                                "row_index": row_index,
+                                "pl": row["pl"],
+                                "en": row["en"],
+                                "reason": "missing_llm_label",
+                                "all_reasons": ["missing_llm_label"],
+                            },
+                        )
+                        continue
+                    if label not in accepted_labels:
+                        label_not_kept += 1
+                        split_primary_counts[split_name]["llm_label_not_kept"] += 1
+                        primary_totals["llm_label_not_kept"] += 1
+                        _write_removed_example(
+                            removed_fp,
+                            {
+                                "split": split_name,
+                                "row_index": row_index,
+                                "pl": row["pl"],
+                                "en": row["en"],
+                                "reason": "llm_label_not_kept",
+                                "all_reasons": ["llm_label_not_kept"],
+                                "llm_label": label,
+                            },
+                        )
+                        continue
+                    kept_rows.append(row)
+                rows_by_split[split_name] = kept_rows
+                audit_meta[f"preaudit_dropped_{split_name}"] = preaudit_dropped
+                audit_meta[f"missing_llm_label_{split_name}"] = missing_labels
+                audit_meta[f"llm_label_not_kept_{split_name}"] = label_not_kept
+
+            val_test_hashes = _build_val_test_hashes_from_rows(rows_by_split, config)
+            global_seen_hashes: set[str] = set()
+
+            split_iter = process_order
+            if show_progress and tqdm is not None:
+                split_iter = tqdm(process_order, desc="Stage2 clean splits", unit="split")
+
+            for split_name in split_iter:
+                input_file = split_files[split_name]
+                output_file = output_dir / input_file.name
+                seen_hashes = global_seen_hashes if config.dedup_scope == "global" else set()
+                cleaned_pl: list[str] = []
+                cleaned_en: list[str] = []
+
+                for row in rows_by_split[split_name]:
+                    row_idx = int(row["row_index"])
+                    pl_text = normalize_text(str(row["pl"]), config)
+                    en_text = normalize_text(str(row["en"]), config)
+                    digest = pair_hash(pl_text, en_text)
+                    reasons = _row_reasons(
+                        split_name=split_name,
+                        pl_text=pl_text,
+                        en_text=en_text,
+                        config=config,
+                        pair_digest=digest,
+                        seen_hashes=seen_hashes,
+                        val_test_hashes=val_test_hashes,
+                    )
+
+                    if reasons:
+                        primary = _pick_primary_reason(reasons)
+                        split_primary_counts[split_name][primary] += 1
+                        primary_totals[primary] += 1
+                        _write_removed_example(
+                            removed_fp,
+                            {
+                                "split": split_name,
+                                "row_index": row_idx,
+                                "pl": pl_text,
+                                "en": en_text,
+                                "reason": primary,
+                                "all_reasons": reasons,
+                            },
+                        )
+                        continue
+
+                    seen_hashes.add(digest)
+                    cleaned_pl.append(pl_text)
+                    cleaned_en.append(en_text)
+
+                table = pa.table({"pl": cleaned_pl, "en": cleaned_en})
+                pq.write_table(table, str(output_file), compression="zstd")
+
+                rows_in = len(datasets_map[split_name])
+                split_stats_map[split_name] = SplitCleaningStats(
+                    split=split_name,
+                    input_file=input_file.name,
+                    output_file=output_file.name,
+                    rows_in=rows_in,
+                    rows_out=len(cleaned_pl),
+                    removed_total=rows_in - len(cleaned_pl),
+                    primary_reason_counts=dict(sorted(split_primary_counts[split_name].items())),
+                )
+
+        ordered_stats = [split_stats_map[split] for split in ("train", "validation", "test")]
+        return ordered_stats, audit_meta, dict(sorted(primary_totals.items()))
 
     val_test_hashes = build_val_test_hashes(datasets_map, config)
     output_dir.mkdir(parents=True, exist_ok=True)

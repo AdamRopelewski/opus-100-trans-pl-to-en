@@ -71,6 +71,8 @@ Script:
 
 What it does:
 - Reads raw train/validation/test splits.
+- Optionally consumes Stage 1 labels via `--llm-labels` and keeps only accepted
+  LLM rows before writing processed parquet.
 - Normalizes text (NFKC, whitespace cleanup, optional control-char removal).
 - Applies filters (null/empty, min/max words, ratio, identical pair).
 - Applies deduplication and anti-leakage protections.
@@ -88,6 +90,13 @@ Stage 2 behavior note:
 - No language-ID filter is used.
 - Filtering is based on normalization, min/max words, length ratio,
   identical-pair checks, deduplication, and leakage protection.
+
+Stage 2 LLM label filtering:
+- `--llm-labels reports/llm_audit_.../llm_audit_labels.jsonl` enables Stage 1
+  label filtering.
+- Default/`--good-only` keeps only label `2` (`good`).
+- `--keep-uncertain` keeps labels `1` and `2` (`uncertain`, `good`).
+- Rows missing from labels JSONL are dropped.
 
 
 ## Leakage safety and dedup policy (implemented)
