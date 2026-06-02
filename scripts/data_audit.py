@@ -12,7 +12,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.utils.config import get_nested, load_config
 from src.utils.llm_audit import (
     LlmAuditConfig,
-    PreAuditConfig,
     run_stage1_llm_audit,
     write_llm_audit_report,
 )
@@ -25,6 +24,7 @@ from src.utils.pipeline_constants import (
     DEFAULT_LLM_UNCERTAIN_RATIO_RERUN_THRESHOLD,
     DEFAULT_OLLAMA_ENDPOINT,
 )
+from src.utils.preaudit import PreAuditConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:

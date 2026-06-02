@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
@@ -25,6 +24,7 @@ from src.utils.pipeline_constants import (
     DEFAULT_LLM_UNCERTAIN_RATIO_RERUN_THRESHOLD,
     DEFAULT_OLLAMA_ENDPOINT,
 )
+from src.utils.preaudit import PreAuditConfig, preaudit_filter_rows
 
 
 @dataclass
@@ -40,123 +40,12 @@ class LlmAuditConfig:
     verbose_preview_rows: int = 10
 
 
-@dataclass
-class PreAuditConfig:
-    deduplicate_pairs: bool = True
-    remove_identical_pairs: bool = True
-    remove_square_bracket_content: bool = True
-    min_words: int = 1
-    max_words: int = 200
-    max_length_ratio: float = 4.0
-
-
 class UncertainBatchError(RuntimeError):
     pass
 
 
 LABEL_TO_INT = {"bad": 0, "uncertain": 1, "good": 2}
 INT_TO_LABEL = {0: "bad", 1: "uncertain", 2: "good"}
-
-
-def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _strip_square_bracket_content(text: str) -> str:
-    # Remove subtitle-like cues such as [SIGHS], [MUSIC], [APPLAUSE]
-    return re.sub(r"\[[^\]]*\]", " ", text)
-
-
-_ALNUM_PL_EN = "A-Za-z0-9ĄąĆćĘęŁłŃńÓóŚśŹźŻż"
-
-
-def _sanitize_preaudit_text(text: str) -> str:
-    out = text
-    # Normalize leading whitespace and dialogue markers.
-    out = out.lstrip()
-    out = re.sub(r"^[\-*\s]+", "", out)
-
-    # Keep ellipsis only at end, preceded by letter/digit.
-    out = re.sub(rf"(?<![{_ALNUM_PL_EN}])\.{{3}}", " ", out)
-    out = re.sub(rf"\.{{3}}(?!\s*$)", " ", out)
-
-    # Remove all characters except plain text whitelist.
-    out = re.sub(rf"[^ {_ALNUM_PL_EN}\-\?,\.:;'!]", " ", out)
-
-    # Keep '-' only when between letters/digits.
-    out = re.sub(rf"(?<![{_ALNUM_PL_EN}])-(?=[{_ALNUM_PL_EN}]|\s|$)", " ", out)
-    out = re.sub(rf"(?<=[{_ALNUM_PL_EN}])-(?![{_ALNUM_PL_EN}])", " ", out)
-
-    return out
-
-
-def _pair_key(pl: str, en: str) -> str:
-    return f"{pl}\x1f{en}"
-
-
-def _word_count(text: str) -> int:
-    return len(text.split())
-
-
-def _preaudit_filter_rows(
-    dataset: Dataset,
-    cfg: PreAuditConfig,
-    split_name: str,
-    show_progress: bool,
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    dropped: Counter[str] = Counter()
-    iterator = enumerate(dataset)
-    if show_progress and tqdm is not None:
-        iterator = enumerate(
-            tqdm(
-                dataset,
-                total=len(dataset),
-                desc=f"Preaudit [{split_name}]",
-                unit="rows",
-                leave=False,
-            )
-        )
-    for idx, row in iterator:
-        tr = row.get("translation")
-        if not isinstance(tr, dict):
-            dropped["null_pair"] += 1
-            continue
-        pl = str(tr.get("pl", ""))
-        en = str(tr.get("en", ""))
-        if cfg.remove_square_bracket_content:
-            pl = _strip_square_bracket_content(pl)
-            en = _strip_square_bracket_content(en)
-        pl = _sanitize_preaudit_text(pl)
-        en = _sanitize_preaudit_text(en)
-        pl = _normalize_text(pl)
-        en = _normalize_text(en)
-        if not pl or not en:
-            dropped["empty_pair"] += 1
-            continue
-        if cfg.remove_identical_pairs and pl == en:
-            dropped["identical_source_target"] += 1
-            continue
-        plw = _word_count(pl)
-        enw = _word_count(en)
-        if plw < cfg.min_words or enw < cfg.min_words:
-            dropped["min_words"] += 1
-            continue
-        if plw > cfg.max_words or enw > cfg.max_words:
-            dropped["max_words"] += 1
-            continue
-        ratio = max(plw, enw) / max(1, min(plw, enw))
-        if ratio > cfg.max_length_ratio:
-            dropped["length_ratio"] += 1
-            continue
-        key = _pair_key(pl, en)
-        if cfg.deduplicate_pairs and key in seen:
-            dropped["duplicate_pair"] += 1
-            continue
-        seen.add(key)
-        rows.append({"row_index": idx, "pl": pl, "en": en})
-    return rows, dict(sorted(dropped.items()))
 
 
 def _build_batches(records: list[dict[str, Any]], max_chars: int, max_rows: int) -> list[list[dict[str, Any]]]:
@@ -447,7 +336,7 @@ def run_stage1_llm_audit(
 
         for split, file_path in split_iter:
             dataset = Dataset.from_parquet(str(file_path))
-            rows, preaudit_dropped = _preaudit_filter_rows(
+            rows, preaudit_dropped = preaudit_filter_rows(
                 dataset,
                 preaudit_cfg,
                 split_name=split,
