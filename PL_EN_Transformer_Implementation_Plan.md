@@ -457,8 +457,8 @@ stage4_dataloader:
 
 stage3_tokenizer:
   type: sentencepiece
-  vocab_size: 32000
-  character_coverage: 0.9995
+  vocab_size: 16000
+  character_coverage: 1.0
   model_prefix: tokenizers/spm_pl_en
 
 stage5_model:

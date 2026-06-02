@@ -9,9 +9,10 @@ encoder-decoder Transformer for **Polish -> English** translation on
 Current implemented scope in code:
 - Stage 1: data audit
 - Stage 2: data cleaning
+- Stage 3: tokenizer training
 
-Stages 3+ (tokenizer, dataloader, model, train, eval) are planned in config
-and implementation plan, but not implemented yet.
+Stages 4+ (dataloader, model, train, eval) are planned in config and
+implementation plan, but not implemented yet.
 
 
 ## Data flow (what is already working)
@@ -40,23 +41,23 @@ What it does:
   - `uncertain` (manual review)
 - Enforces strict JSON response format and ID validation.
 - Retries batch on invalid JSON/ID mismatch and when uncertain ratio is too high.
-- If uncertain stays high after retries, audit stops and asks whether to rerun with higher retries.
+- If uncertain stays high after retries, rows remain labeled as `uncertain`.
 - Writes outputs:
-  - `reports/data_audit.md`
-  - `reports/data_audit_manifest.json`
-  - `reports/llm_audit_labels.jsonl`
-  - `reports/llm_audit_batches.jsonl`
-  - `reports/llm_bad_sentences.json`
+  - `reports/llm_audit_<timestamp>/data_audit.md`
+  - `reports/llm_audit_<timestamp>/data_audit_manifest.json`
+  - `reports/llm_audit_<timestamp>/llm_audit_labels.jsonl`
+  - `reports/llm_audit_<timestamp>/llm_audit_batches.jsonl`
+  - `reports/llm_audit_<timestamp>/llm_bad_sentences.json`
   - per-split artifacts:
-    - `reports/llm_audit_labels_validation.jsonl`
-    - `reports/llm_audit_labels_test.jsonl`
-    - `reports/llm_audit_labels_train.jsonl`
-    - `reports/llm_audit_batches_validation.jsonl`
-    - `reports/llm_audit_batches_test.jsonl`
-    - `reports/llm_audit_batches_train.jsonl`
-    - `reports/llm_bad_sentences_validation.json`
-  - `reports/llm_bad_sentences_test.json`
-  - `reports/llm_bad_sentences_train.json`
+    - `reports/llm_audit_<timestamp>/llm_audit_labels_validation.jsonl`
+    - `reports/llm_audit_<timestamp>/llm_audit_labels_test.jsonl`
+    - `reports/llm_audit_<timestamp>/llm_audit_labels_train.jsonl`
+    - `reports/llm_audit_<timestamp>/llm_audit_batches_validation.jsonl`
+    - `reports/llm_audit_<timestamp>/llm_audit_batches_test.jsonl`
+    - `reports/llm_audit_<timestamp>/llm_audit_batches_train.jsonl`
+    - `reports/llm_audit_<timestamp>/llm_bad_sentences_validation.json`
+    - `reports/llm_audit_<timestamp>/llm_bad_sentences_test.json`
+    - `reports/llm_audit_<timestamp>/llm_bad_sentences_train.json`
 
 Label JSONL format is compact to keep files small:
 - global labels file: `{"s":"split","i":row_index,"l":label_id}`
@@ -97,6 +98,29 @@ Stage 2 LLM label filtering:
 - Default/`--good-only` keeps only label `2` (`good`).
 - `--keep-uncertain` keeps labels `1` and `2` (`uncertain`, `good`).
 - Rows missing from labels JSONL are dropped.
+
+
+## Stage 3: Tokenizer
+
+Script:
+- `scripts/train_tokenizer.py`
+
+What it does:
+- Reads cleaned train/validation/test splits from `data/processed/en-pl`.
+- Builds a shared Polish-English SentencePiece BPE training corpus.
+- Trains a shared tokenizer with `vocab_size: 16000`.
+- Locks special token ids: `pad=0`, `unk=1`, `bos=2`, `eos=3`.
+- Writes outputs:
+  - `tokenizers/spm_pl_en.model`
+  - `tokenizers/spm_pl_en.vocab`
+  - `reports/tokenizer_stats.md`
+
+Tokenizer verification report includes:
+- UNK rate per split.
+- Subword/word compression ratio.
+- Mean and p95 pieces per sentence.
+- Long-word split stats by frequency bucket.
+- Common long-word examples.
 
 
 ## Leakage safety and dedup policy (implemented)
@@ -141,6 +165,7 @@ From repo root:
 ```bash
 python scripts/data_audit.py --config configs/project_config.yaml
 python scripts/clean_data.py --config configs/project_config.yaml
+python scripts/train_tokenizer.py --config configs/project_config.yaml
 ```
 
 Verbose audit mode (prints batch preview rows, parsed label counts, and running totals):
