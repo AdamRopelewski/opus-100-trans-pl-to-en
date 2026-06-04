@@ -242,14 +242,14 @@ Status:
 ## Stage 4 - Dataset Pipeline in PyTorch
 
 Implementation note:
-- Not implemented in code yet.
-- Planned scope includes fp16/bf16-safe padding, masks, and batch smoke tests.
+- Implemented as the first runnable training pipeline.
+- Includes dataloading, dynamic padding, masks, compact `nn.Transformer` model and validation-loss checkpointing.
 
 Status:
-- Planned only (not implemented yet).
+- Implemented in code.
 
 Objective:
-- Build efficient train/val/test dataloaders with proper masks.
+- Train PL -> EN from processed parquet splits using the Stage 3 shared SentencePiece tokenizer.
 
 Tasks:
 - Implement dataset class for `(src_ids, tgt_in_ids, tgt_out_ids)`.
@@ -258,17 +258,25 @@ Tasks:
   - source padding mask
   - target padding mask
   - causal mask for decoder self-attention
-- Add length-based bucketing for speed.
+- Implement compact Transformer model, loss, optimizer, scheduler, AMP, checkpointing, and JSONL logging.
 
 Outputs:
-- `src/data/dataset.py`
+- `scripts/train_stage4.py`
+- `src/data/translation_dataset.py`
 - `src/data/collate.py`
-- `src/data/dataloader.py`
+- `src/model/transformer_nmt.py`
+- `src/train/device.py`
+- `src/train/losses.py`
+- `src/train/scheduler.py`
+- `src/train/stage4.py`
+- `checkpoints/stage4_last.pt` during training
+- `checkpoints/stage4_best.pt` during training
+- `logs/stage4_train.jsonl` during training
 
 Acceptance checks:
 - Batches have correct tensor shapes.
 - Causal mask blocks future positions.
-- No shape mismatch during a forward pass.
+- Forward/backward smoke test works.
 
 ---
 

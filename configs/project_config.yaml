@@ -82,16 +82,18 @@ stage3_tokenizer:
     report_md: reports/tokenizer_stats.md
 
 stage4_dataloader:
-  enabled: false
+  enabled: true
   max_seq_len: 128
   pad_to_multiple_of: 8
   bucket_by_length: true
   drop_overlength: true
+  shuffle_train: true
   num_workers: 4
   pin_memory: true
+  prefetch_factor: 2
 
 stage5_model:
-  enabled: false
+  enabled: true
   preset: small
   presets:
     small:
@@ -114,7 +116,10 @@ stage5_model:
       tie_encoder_decoder_embeddings: false
 
 stage6_train:
-  enabled: false
+  enabled: true
+  require_cuda: true
+  device: cuda
+  allow_cpu_fallback: false
   precision: bf16
   fallback_precision: fp16
   optimizer: adamw
@@ -134,6 +139,9 @@ stage6_train:
   log_grad_norm: true
   skip_nan_batches: true
   resume_from_checkpoint: null
+  output_last_checkpoint: checkpoints/stage4_last.pt
+  output_best_checkpoint: checkpoints/stage4_best.pt
+  log_jsonl: logs/stage4_train.jsonl
 
 stage7_eval:
   enabled: false

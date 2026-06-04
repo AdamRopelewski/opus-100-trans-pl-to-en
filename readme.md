@@ -10,9 +10,10 @@ Current implemented scope in code:
 - Stage 1: data audit
 - Stage 2: data cleaning
 - Stage 3: tokenizer training
+- Stage 4: first PyTorch training pipeline
 
-Stages 4+ (dataloader, model, train, eval) are planned in config and
-implementation plan, but not implemented yet.
+Stages 5+ are still planned as deeper model/eval iterations, but Stage 4 now
+contains the first runnable dataloader, Transformer model, training loop and validation-loss checkpointing.
 
 
 ## Data flow (what is already working)
@@ -21,6 +22,8 @@ implementation plan, but not implemented yet.
 2. Stage 1 audits raw splits and writes reports only.
 3. Stage 2 cleans raw splits and writes processed parquet files to
    `data/processed/en-pl`.
+4. Stage 3 trains the shared SentencePiece tokenizer.
+5. Stage 4 trains PL -> EN on processed parquet with PyTorch.
 
 Important: Stage 1 does **not** modify dataset files.
 
@@ -123,6 +126,29 @@ Tokenizer verification report includes:
 - Common long-word examples.
 
 
+## Stage 4: PyTorch GPU Training
+
+Script:
+- `scripts/train_stage4.py`
+
+What it does:
+- Reads processed train/validation/test parquet splits from `data/processed/en-pl`.
+- Uses `tokenizers/spm_pl_en.model` with special ids `pad=0`, `unk=1`, `bos=2`, `eos=3`.
+- Encodes Polish source as source ids plus EOS.
+- Encodes English target as BOS-prefixed decoder input and EOS-suffixed labels.
+- Dynamically pads batches, creates source/target padding masks, and creates the decoder causal mask.
+- Trains a compact `nn.Transformer` encoder-decoder model using AdamW, inverse-sqrt warmup scheduling, gradient accumulation, gradient clipping, label smoothing, and CUDA AMP.
+- Saves checkpoints:
+  - `checkpoints/stage4_last.pt`
+  - `checkpoints/stage4_best.pt`
+- Writes JSONL training logs to `logs/stage4_train.jsonl`.
+
+GPU behavior:
+- `stage6_train.require_cuda: true`
+- `stage6_train.device: cuda`
+- `stage6_train.allow_cpu_fallback: false`
+
+
 ## Leakage safety and dedup policy (implemented)
 
 Current cleaning supports global leakage-safe behavior:
@@ -166,6 +192,7 @@ From repo root:
 python scripts/data_audit.py --config configs/project_config.yaml
 python scripts/clean_data.py --config configs/project_config.yaml
 python scripts/train_tokenizer.py --config configs/project_config.yaml
+python scripts/train_stage4.py --config configs/project_config.yaml
 ```
 
 Verbose audit mode (prints batch preview rows, parsed label counts, and running totals):
@@ -190,5 +217,6 @@ ollama pull qwen2.5:7b
 
 Note on config scope:
 - `stage3_tokenizer` trains a shared SentencePiece BPE tokenizer and writes `reports/tokenizer_stats.md`.
-- `stage4_dataloader` through `stage7_eval` and `smoke` are placeholders for planned stages.
-- Stage 1 through Stage 3 are implemented in code right now.
+- `stage4_dataloader`, `stage5_model`, and `stage6_train` are used by `scripts/train_stage4.py`.
+- `stage7_eval` and `smoke` remain config sections for later evaluation and quick training checks.
+- Stage 1 through Stage 4 are implemented in code right now.
