@@ -70,8 +70,18 @@ class TransformerNMT(nn.Module):
             custom_encoder=encoder,
         )
         self.output_projection = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self._reset_parameters()
         if config.tie_decoder_embeddings:
             self.output_projection.weight = self.tgt_embedding.weight
+
+    def _reset_parameters(self) -> None:
+        std = self.config.d_model**-0.5
+        nn.init.normal_(self.src_embedding.weight, mean=0.0, std=std)
+        nn.init.normal_(self.tgt_embedding.weight, mean=0.0, std=std)
+        nn.init.xavier_uniform_(self.output_projection.weight)
+        with torch.no_grad():
+            self.src_embedding.weight[self.config.pad_id].zero_()
+            self.tgt_embedding.weight[self.config.pad_id].zero_()
 
     def forward(
         self,

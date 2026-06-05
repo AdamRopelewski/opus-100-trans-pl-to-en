@@ -34,6 +34,7 @@ class Stage4RuntimeSettings:
     save_every_steps: int
     max_steps: int | None
     overfit_loss_threshold: float | None
+    early_stopping_patience: int | None
     dropout: float
     label_smoothing: float
     shuffle_train: bool
@@ -104,6 +105,7 @@ def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> St
             save_every_steps=25,
             max_steps=max_steps,
             overfit_loss_threshold=float(args.overfit_loss_threshold),
+            early_stopping_patience=None,
             dropout=0.0,
             label_smoothing=0.0,
             shuffle_train=False,
@@ -115,6 +117,7 @@ def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> St
         )
 
     preset_name = str(get_nested(config_data, "stage5_model.preset", "small"))
+    early_stopping_patience = get_nested(config_data, "stage6_train.early_stopping_patience", 5)
     return Stage4RuntimeSettings(
         mode="full",
         overfit_samples=None,
@@ -125,6 +128,7 @@ def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> St
         save_every_steps=int(get_nested(config_data, "stage6_train.save_every_steps", 2000)),
         max_steps=smoke_max_steps,
         overfit_loss_threshold=None,
+        early_stopping_patience=None if early_stopping_patience is None else int(early_stopping_patience),
         dropout=float(get_nested(config_data, f"stage5_model.presets.{preset_name}.dropout", 0.1)),
         label_smoothing=float(get_nested(config_data, "stage6_train.label_smoothing", 0.1)),
         shuffle_train=bool(get_nested(config_data, "stage4_dataloader.shuffle_train", True)),
@@ -369,6 +373,7 @@ def main() -> int:
         skip_nan_batches=bool(get_nested(config_data, "stage6_train.skip_nan_batches", True)),
         max_steps=runtime.max_steps,
         overfit_loss_threshold=runtime.overfit_loss_threshold,
+        early_stopping_patience=runtime.early_stopping_patience,
         last_checkpoint_path=Path(get_nested(config_data, "stage6_train.output_last_checkpoint", "checkpoints/stage4_last.pt")),
         best_checkpoint_path=Path(get_nested(config_data, "stage6_train.output_best_checkpoint", "checkpoints/stage4_best.pt")),
         log_jsonl_path=Path(get_nested(config_data, "stage6_train.log_jsonl", "logs/stage4_train.jsonl")),

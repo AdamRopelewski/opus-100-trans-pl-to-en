@@ -40,6 +40,7 @@ class Stage4TrainConfig:
     start_epoch: int = 1
     start_step: int = 0
     best_validation_loss: float = math.inf
+    early_stopping_patience: int | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,7 @@ def train_stage4(
     model.to(device)
     scaler = GradScaler("cuda", enabled=config.use_grad_scaler)
     best_validation_loss = config.best_validation_loss
+    validations_without_improvement = 0
     global_step = config.start_step
     optimizer.zero_grad(set_to_none=True)
 
@@ -199,6 +201,7 @@ def train_stage4(
             "start_epoch": config.start_epoch,
             "start_step": config.start_step,
             "best_validation_loss": best_validation_loss,
+            "early_stopping_patience": config.early_stopping_patience,
         },
     )
 
@@ -240,10 +243,12 @@ def train_stage4(
             current_lr = float(scheduler.get_last_lr()[0])
             should_validate = global_step == 1 or global_step % config.validate_every_steps == 0
             validation_loss = None
+            early_stopping_triggered = False
             if should_validate:
                 validation_loss = validate(model, validation_loader, criterion, device, config.amp_dtype)
                 if validation_loss < best_validation_loss:
                     best_validation_loss = validation_loss
+                    validations_without_improvement = 0
                     _save_checkpoint(
                         config.best_checkpoint_path,
                         model,
@@ -255,6 +260,9 @@ def train_stage4(
                         _config_with_best_loss(config, best_validation_loss),
                         device_info,
                     )
+                elif config.early_stopping_patience is not None:
+                    validations_without_improvement += 1
+                    early_stopping_triggered = validations_without_improvement >= config.early_stopping_patience
 
             if global_step % config.save_every_steps == 0 or should_validate:
                 _save_checkpoint(
@@ -280,6 +288,7 @@ def train_stage4(
                     "train_loss": train_loss,
                     "validation_loss": validation_loss,
                     "best_validation_loss": best_validation_loss,
+                    "validations_without_improvement": validations_without_improvement,
                     "grad_norm": grad_norm,
                     "tokens_per_batch": tokens_per_batch,
                     "lr": current_lr,
@@ -293,6 +302,41 @@ def train_stage4(
                 f"validation_loss={validation_loss if validation_loss is not None else 'n/a'} "
                 f"grad_norm={grad_norm if grad_norm is not None else 'n/a'} lr={current_lr:.6g}"
             )
+
+            if early_stopping_triggered:
+                checkpoint_config = _config_with_best_loss(config, best_validation_loss)
+                _save_checkpoint(
+                    config.last_checkpoint_path,
+                    model,
+                    optimizer,
+                    scheduler,
+                    epoch,
+                    global_step,
+                    validation_loss,
+                    checkpoint_config,
+                    device_info,
+                )
+                _write_log(
+                    config.log_jsonl_path,
+                    {
+                        "event": "early_stop",
+                        "mode": config.mode,
+                        "time_utc": _utc_now(),
+                        "epoch": epoch,
+                        "step": global_step,
+                        "validation_loss": validation_loss,
+                        "best_validation_loss": best_validation_loss,
+                        "validations_without_improvement": validations_without_improvement,
+                        "early_stopping_patience": config.early_stopping_patience,
+                        "checkpoint": str(config.last_checkpoint_path),
+                    },
+                )
+                print(
+                    "Early stopping triggered: "
+                    f"{validations_without_improvement} validations without improvement "
+                    f"at step={global_step}."
+                )
+                return best_validation_loss
 
             if (
                 config.mode == "overfit"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import warnings
@@ -27,6 +28,7 @@ from src.model.transformer_nmt import TransformerNMT, TransformerNMTConfig
 from src.train.device import CudaRequiredError, resolve_training_device, select_amp_precision
 from src.train.losses import LabelSmoothedCrossEntropy
 from src.train.scheduler import build_inverse_sqrt_scheduler
+import src.train.stage4 as stage4_module
 from src.train.stage4 import Stage4TrainConfig, load_stage4_checkpoint, train_stage4
 
 
@@ -106,6 +108,49 @@ def test_transformer_nmt_constructs_without_nested_tensor_warning() -> None:
 
     messages = [str(warning.message) for warning in caught]
     assert not any("enable_nested_tensor is True" in message for message in messages)
+
+
+def test_tied_decoder_embedding_init_keeps_logits_in_reasonable_range() -> None:
+    torch.manual_seed(123)
+    examples, _rows_in, _overlength = build_translation_examples(
+        iter([("ab", "cd"), ("ef", "gh")]),
+        _encode,
+        SpecialTokenIds(),
+        max_seq_len=8,
+    )
+    batch = TranslationCollator(pad_id=0, pad_to_multiple_of=4)(examples)
+    model = TransformerNMT(
+        TransformerNMTConfig(
+            vocab_size=64,
+            max_seq_len=8,
+            d_model=16,
+            nhead=4,
+            num_encoder_layers=1,
+            num_decoder_layers=1,
+            dim_feedforward=32,
+            dropout=0.0,
+            tie_decoder_embeddings=True,
+        )
+    )
+    criterion = LabelSmoothedCrossEntropy(label_smoothing=0.0, ignore_index=0)
+
+    assert model.output_projection.weight is model.tgt_embedding.weight
+    assert torch.equal(model.src_embedding.weight[0], torch.zeros_like(model.src_embedding.weight[0]))
+    assert torch.equal(model.tgt_embedding.weight[0], torch.zeros_like(model.tgt_embedding.weight[0]))
+
+    logits = model(
+        batch.src_ids,
+        batch.tgt_in_ids,
+        batch.src_key_padding_mask,
+        batch.tgt_key_padding_mask,
+        batch.tgt_causal_mask,
+    )
+    loss = criterion(logits, batch.tgt_out_ids)
+
+    assert torch.isfinite(logits).all()
+    assert torch.isfinite(loss)
+    assert float(logits.detach().abs().max()) < 20.0
+    assert float(loss.detach()) < 20.0
 
 
 def test_model_forward_and_backward_smoke() -> None:
@@ -192,6 +237,7 @@ def test_overfit_runtime_forces_debug_settings() -> None:
     assert not runtime.pin_memory
     assert runtime.warmup_steps == 1
     assert runtime.weight_decay == 0.0
+    assert runtime.early_stopping_patience is None
 
     examples, _rows_in, _overlength = build_translation_examples(
         iter([("a", "x"), ("b", "y")]),
@@ -216,6 +262,20 @@ def test_overfit_runtime_forces_debug_settings() -> None:
 
     assert validation_dataset is train_dataset
     assert validation_stats is train_stats
+
+
+def test_full_runtime_reads_early_stopping_patience() -> None:
+    args = SimpleNamespace(overfit_samples=None, overfit_max_steps=200, overfit_loss_threshold=0.1)
+    runtime = _resolve_runtime_settings(
+        {
+            "stage5_model": {"preset": "small", "presets": {"small": {"dropout": 0.2}}},
+            "stage6_train": {"early_stopping_patience": 7},
+        },
+        args,
+    )
+
+    assert runtime.mode == "full"
+    assert runtime.early_stopping_patience == 7
 
 
 def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
@@ -307,3 +367,87 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
     assert resume_state.best_validation_loss == checkpoint["best_validation_loss"]
     for original, resumed in zip(model.parameters(), resumed_model.parameters(), strict=True):
         assert torch.equal(original, resumed)
+
+
+
+def test_train_stage4_stops_after_early_stopping_patience(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    examples, _rows_in, _overlength = build_translation_examples(
+        iter([("ab", "cd"), ("ef", "gh"), ("ij", "kl"), ("mn", "op")]),
+        _encode,
+        SpecialTokenIds(),
+        max_seq_len=8,
+    )
+    loader = torch.utils.data.DataLoader(
+        TranslationDataset(examples),
+        batch_size=1,
+        shuffle=False,
+        collate_fn=TranslationCollator(pad_id=0, pad_to_multiple_of=4),
+    )
+    model_cfg = TransformerNMTConfig(
+        vocab_size=32,
+        max_seq_len=8,
+        d_model=16,
+        nhead=4,
+        num_encoder_layers=1,
+        num_decoder_layers=1,
+        dim_feedforward=32,
+        dropout=0.0,
+    )
+    model = TransformerNMT(model_cfg)
+    criterion = LabelSmoothedCrossEntropy(label_smoothing=0.0, ignore_index=0)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    scheduler = build_inverse_sqrt_scheduler(optimizer, warmup_steps=1)
+    device_info = resolve_training_device("cpu", require_cuda=False, allow_cpu_fallback=True)
+    validation_losses = iter([1.0, 1.1, 1.2])
+
+    def fake_validate(*_args, **_kwargs) -> float:
+        return next(validation_losses)
+
+    monkeypatch.setattr(stage4_module, "validate", fake_validate)
+    train_cfg = Stage4TrainConfig(
+        mode="full",
+        num_epochs=5,
+        grad_accum_steps=1,
+        validate_every_steps=1,
+        save_every_steps=100,
+        grad_clip_norm=1.0,
+        skip_nan_batches=False,
+        max_steps=10,
+        overfit_loss_threshold=None,
+        last_checkpoint_path=tmp_path / "last.pt",
+        best_checkpoint_path=tmp_path / "best.pt",
+        log_jsonl_path=tmp_path / "train.jsonl",
+        precision_name="fp32",
+        amp_dtype=None,
+        use_grad_scaler=False,
+        model_config={
+            "vocab_size": 32,
+            "pad_id": 0,
+            "max_seq_len": 8,
+            "d_model": 16,
+            "nhead": 4,
+            "num_encoder_layers": 1,
+            "num_decoder_layers": 1,
+            "dim_feedforward": 32,
+            "dropout": 0.0,
+            "tie_decoder_embeddings": True,
+        },
+        tokenizer_path="tokenizers/test.model",
+        tokenizer_special_ids={"pad_id": 0, "unk_id": 1, "bos_id": 2, "eos_id": 3},
+        vocab_size=32,
+        early_stopping_patience=2,
+    )
+
+    best_loss = train_stage4(model, loader, loader, criterion, optimizer, scheduler, train_cfg, device_info)
+
+    assert best_loss == 1.0
+    assert train_cfg.last_checkpoint_path.exists()
+    last_checkpoint = torch.load(train_cfg.last_checkpoint_path, map_location=torch.device("cpu"))
+    assert last_checkpoint["global_step"] == 3
+    assert last_checkpoint["best_validation_loss"] == 1.0
+    events = [json.loads(line) for line in train_cfg.log_jsonl_path.read_text().splitlines()]
+    assert events[-1]["event"] == "early_stop"
+    assert events[-1]["step"] == 3
+    assert events[-1]["validations_without_improvement"] == 2
