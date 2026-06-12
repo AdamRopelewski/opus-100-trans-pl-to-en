@@ -218,5 +218,5 @@ ollama pull qwen2.5:7b
 Note on config scope:
 - `stage3_tokenizer` trains a shared SentencePiece BPE tokenizer and writes `reports/tokenizer_stats.md`.
 - `stage4_dataloader`, `stage5_model`, and `stage6_train` are used by `scripts/train_model.py`.
-- `stage7_eval` and `smoke` remain config sections for later evaluation and quick training checks.
+- `stage7_eval` remains a config section for later evaluation.
 - Stage 1 through Stage 4 are implemented in code right now.

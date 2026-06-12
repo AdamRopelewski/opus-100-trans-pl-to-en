@@ -85,7 +85,6 @@ stage4_dataloader:
   enabled: true
   max_seq_len: 128
   pad_to_multiple_of: 8
-  bucket_by_length: true
   drop_overlength: true
   shuffle_train: true
   num_workers: 4
@@ -104,7 +103,6 @@ stage5_model:
       dim_feedforward: 1024
       dropout: 0.1
       tie_decoder_embeddings: true
-      tie_encoder_decoder_embeddings: false
     base:
       d_model: 512
       nhead: 8
@@ -113,7 +111,6 @@ stage5_model:
       dim_feedforward: 2048
       dropout: 0.1
       tie_decoder_embeddings: true
-      tie_encoder_decoder_embeddings: false
 
 stage6_train:
   enabled: true
@@ -122,8 +119,6 @@ stage6_train:
   allow_cpu_fallback: false
   precision: bf16
   fallback_precision: fp16
-  optimizer: adamw
-  scheduler: inverse_sqrt
   lr_peak: 1.0e-4
   warmup_steps: 8000
   weight_decay: 0.01
@@ -134,11 +129,8 @@ stage6_train:
   num_epochs: 100
   validate_every_steps: 500
   save_every_steps: 500
-  save_best_by: validation_loss
   early_stopping_patience: 3
-  log_grad_norm: true
   skip_nan_batches: true
-  resume_from_checkpoint: null
   output_last_checkpoint: checkpoints/model_last.pt
   output_best_checkpoint: checkpoints/model_best.pt
   log_jsonl: logs/model_train.jsonl
@@ -157,9 +149,3 @@ stage7_eval:
     metrics_json: reports/eval_metrics.json
     translations_tsv: reports/translations/test_translations.tsv
     samples_md: reports/translations/sample_translations.md
-
-smoke:
-  enabled: false
-  limit_train_samples: 1024
-  limit_validation_samples: 256
-  max_steps: 20

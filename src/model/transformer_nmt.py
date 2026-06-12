@@ -27,7 +27,10 @@ class SinusoidalPositionalEncoding(nn.Module):
         super().__init__()
         self.dropout = nn.Dropout(dropout)
         position = torch.arange(max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2, dtype=torch.float)
+            * (-math.log(10000.0) / d_model)
+        )
         pe = torch.zeros(max_len, d_model)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
@@ -89,7 +92,9 @@ class FeedForward(nn.Module):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model: int, nhead: int, dim_feedforward: int, dropout: float) -> None:
+    def __init__(
+        self, d_model: int, nhead: int, dim_feedforward: int, dropout: float
+    ) -> None:
         super().__init__()
         self.attn = MultiHeadAttention(d_model, nhead, dropout)
         self.ff = FeedForward(d_model, dim_feedforward, dropout)
@@ -104,7 +109,9 @@ class EncoderLayer(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, d_model: int, nhead: int, dim_feedforward: int, dropout: float) -> None:
+    def __init__(
+        self, d_model: int, nhead: int, dim_feedforward: int, dropout: float
+    ) -> None:
         super().__init__()
         self.self_attn = MultiHeadAttention(d_model, nhead, dropout)
         self.cross_attn = MultiHeadAttention(d_model, nhead, dropout)
@@ -131,22 +138,34 @@ class TransformerNMT(nn.Module):
     def __init__(self, config: TransformerNMTConfig) -> None:
         super().__init__()
         self.config = config
-        self.src_embedding = nn.Embedding(config.vocab_size, config.d_model, padding_idx=config.pad_id)
-        self.tgt_embedding = nn.Embedding(config.vocab_size, config.d_model, padding_idx=config.pad_id)
-        self.position = SinusoidalPositionalEncoding(config.d_model, config.max_seq_len, config.dropout)
+        self.src_embedding = nn.Embedding(
+            config.vocab_size, config.d_model, padding_idx=config.pad_id
+        )
+        self.tgt_embedding = nn.Embedding(
+            config.vocab_size, config.d_model, padding_idx=config.pad_id
+        )
+        self.position = SinusoidalPositionalEncoding(
+            config.d_model, config.max_seq_len, config.dropout
+        )
         self.encoder = nn.ModuleList(
             [
-                EncoderLayer(config.d_model, config.nhead, config.dim_feedforward, config.dropout)
+                EncoderLayer(
+                    config.d_model, config.nhead, config.dim_feedforward, config.dropout
+                )
                 for _ in range(config.num_encoder_layers)
             ]
         )
         self.decoder = nn.ModuleList(
             [
-                DecoderLayer(config.d_model, config.nhead, config.dim_feedforward, config.dropout)
+                DecoderLayer(
+                    config.d_model, config.nhead, config.dim_feedforward, config.dropout
+                )
                 for _ in range(config.num_decoder_layers)
             ]
         )
-        self.output_projection = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.output_projection = nn.Linear(
+            config.d_model, config.vocab_size, bias=False
+        )
         self._reset_parameters()
         if config.tie_decoder_embeddings:
             self.output_projection.weight = self.tgt_embedding.weight
@@ -164,7 +183,9 @@ class TransformerNMT(nn.Module):
             self.src_embedding.weight[self.config.pad_id].zero_()
             self.tgt_embedding.weight[self.config.pad_id].zero_()
 
-    def make_src_attention_mask(self, src_key_padding_mask: torch.Tensor) -> torch.Tensor:
+    def make_src_attention_mask(
+        self, src_key_padding_mask: torch.Tensor
+    ) -> torch.Tensor:
         return src_key_padding_mask.logical_not().unsqueeze(1).unsqueeze(2)
 
     def make_tgt_attention_mask(
@@ -189,7 +210,9 @@ class TransformerNMT(nn.Module):
         src_mask: torch.Tensor,
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
-        x = self.position(self.tgt_embedding(tgt_in_ids) * math.sqrt(self.config.d_model))
+        x = self.position(
+            self.tgt_embedding(tgt_in_ids) * math.sqrt(self.config.d_model)
+        )
         for layer in self.decoder:
             x = layer(x, enc_out, src_mask, tgt_mask)
         return self.output_projection(x)
@@ -209,7 +232,9 @@ class TransformerNMT(nn.Module):
 
 
 def _causal_mask(size: int, device: torch.device) -> torch.Tensor:
-    return torch.triu(torch.ones((size, size), dtype=torch.bool, device=device), diagonal=1)
+    return torch.triu(
+        torch.ones((size, size), dtype=torch.bool, device=device), diagonal=1
+    )
 
 
 def greedy_decode(
@@ -230,7 +255,9 @@ def greedy_decode(
     for _ in range(max_new_tokens):
         tgt = torch.tensor([tgt_ids], dtype=torch.long, device=device)
         tgt_key_padding_mask = tgt.eq(model.config.pad_id)
-        tgt_mask = model.make_tgt_attention_mask(tgt_key_padding_mask, _causal_mask(tgt.size(1), device))
+        tgt_mask = model.make_tgt_attention_mask(
+            tgt_key_padding_mask, _causal_mask(tgt.size(1), device)
+        )
         with torch.no_grad():
             logits = model.decode(tgt, enc_out, src_mask, tgt_mask)
         next_id = int(logits[0, -1].argmax().item())
@@ -270,19 +297,29 @@ def beam_search_decode(
                 continue
             tgt = torch.tensor([tokens], dtype=torch.long, device=device)
             tgt_key_padding_mask = tgt.eq(model.config.pad_id)
-            tgt_mask = model.make_tgt_attention_mask(tgt_key_padding_mask, _causal_mask(tgt.size(1), device))
+            tgt_mask = model.make_tgt_attention_mask(
+                tgt_key_padding_mask, _causal_mask(tgt.size(1), device)
+            )
             with torch.no_grad():
                 logits = model.decode(tgt, enc_out, src_mask, tgt_mask)
                 log_probs = F.log_softmax(logits[0, -1], dim=-1)
             top_scores, top_ids = torch.topk(log_probs, k=beam_size)
-            for token_score, token_id in zip(top_scores.tolist(), top_ids.tolist(), strict=True):
-                candidates.append((tokens + [int(token_id)], score + float(token_score)))
+            for token_score, token_id in zip(
+                top_scores.tolist(), top_ids.tolist(), strict=True
+            ):
+                candidates.append(
+                    (tokens + [int(token_id)], score + float(token_score))
+                )
 
         if not candidates:
             break
-        beams = sorted(candidates, key=lambda item: _score_with_length_penalty(item[1], len(item[0]), length_penalty), reverse=True)[
-            :beam_size
-        ]
+        beams = sorted(
+            candidates,
+            key=lambda item: _score_with_length_penalty(
+                item[1], len(item[0]), length_penalty
+            ),
+            reverse=True,
+        )[:beam_size]
         if all(tokens[-1] == eos_id for tokens, _score in beams):
             finished.extend(beams)
             break
@@ -290,16 +327,22 @@ def beam_search_decode(
     best_pool = finished if finished else beams
     best_tokens, _best_score = max(
         best_pool,
-        key=lambda item: _score_with_length_penalty(item[1], len(item[0]), length_penalty),
+        key=lambda item: _score_with_length_penalty(
+            item[1], len(item[0]), length_penalty
+        ),
     )
     return best_tokens
 
 
-def _score_with_length_penalty(score: float, length: int, length_penalty: float) -> float:
+def _score_with_length_penalty(
+    score: float, length: int, length_penalty: float
+) -> float:
     if length_penalty <= 0:
         return score
     return score / (max(1, length) ** length_penalty)
 
 
 def count_parameters(model: nn.Module) -> int:
-    return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+    return sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )

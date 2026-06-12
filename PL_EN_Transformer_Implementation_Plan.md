@@ -276,7 +276,7 @@ Outputs:
 Acceptance checks:
 - Batches have correct tensor shapes.
 - Causal mask blocks future positions.
-- Forward/backward smoke test works.
+- Forward/backward test works.
 
 ---
 

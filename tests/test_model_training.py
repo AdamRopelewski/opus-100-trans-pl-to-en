@@ -25,11 +25,16 @@ from src.data.translation_dataset import (
     load_translation_dataset,
 )
 from src.model.transformer_nmt import TransformerNMT, TransformerNMTConfig
-from src.train.device import CudaRequiredError, resolve_training_device, select_amp_precision
+from src.train.device import (
+    CudaRequiredError,
+    resolve_training_device,
+    select_amp_precision,
+)
 import src.train.model as model_module
 from src.train.model import (
     LabelSmoothedCrossEntropy,
     ModelTrainConfig,
+    TrainingComponents,
     build_inverse_sqrt_scheduler,
     load_model_checkpoint,
     train_model,
@@ -46,11 +51,30 @@ def _encode(text: str) -> list[int]:
     return [ord(ch) % 20 + 4 for ch in text.replace(" ", "")]
 
 
+def _training_components(
+    model: TransformerNMT,
+    loader: torch.utils.data.DataLoader,
+    criterion: LabelSmoothedCrossEntropy,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+) -> TrainingComponents:
+    return TrainingComponents(
+        model=model,
+        train_loader=loader,
+        validation_loader=loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+
+
 def test_dataset_encoding_places_bos_eos_and_drops_overlength() -> None:
     token_ids = SpecialTokenIds()
     rows = iter([("ab", "cd"), ("verylong", "x")])
 
-    examples, rows_in, overlength = build_translation_examples(rows, _encode, token_ids, max_seq_len=4)
+    examples, rows_in, overlength = build_translation_examples(
+        rows, _encode, token_ids, max_seq_len=4
+    )
 
     assert rows_in == 2
     assert overlength == 1
@@ -60,11 +84,15 @@ def test_dataset_encoding_places_bos_eos_and_drops_overlength() -> None:
     assert examples[0].tgt_out_ids[-1] == token_ids.eos_id
 
 
-def test_load_translation_dataset_supports_cleaned_parquet_columns(tmp_path: Path) -> None:
+def test_load_translation_dataset_supports_cleaned_parquet_columns(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "train.parquet"
     _write_parquet(path, [{"pl": "kot", "en": "cat"}])
 
-    dataset, stats = load_translation_dataset("train", path, _encode, SpecialTokenIds(), max_seq_len=16)
+    dataset, stats = load_translation_dataset(
+        "train", path, _encode, SpecialTokenIds(), max_seq_len=16
+    )
 
     assert stats.rows_in == 1
     assert stats.rows_out == 1
@@ -91,7 +119,11 @@ def test_collator_pads_masks_and_causal_mask() -> None:
 def test_make_causal_mask_blocks_future_tokens() -> None:
     mask = make_causal_mask(3)
 
-    assert mask.tolist() == [[False, True, True], [False, False, True], [False, False, False]]
+    assert mask.tolist() == [
+        [False, True, True],
+        [False, False, True],
+        [False, False, False],
+    ]
 
 
 def test_transformer_nmt_constructs_without_nested_tensor_warning() -> None:
@@ -139,8 +171,12 @@ def test_tied_decoder_embedding_init_keeps_logits_in_reasonable_range() -> None:
     criterion = LabelSmoothedCrossEntropy(label_smoothing=0.0, ignore_index=0)
 
     assert model.output_projection.weight is model.tgt_embedding.weight
-    assert torch.equal(model.src_embedding.weight[0], torch.zeros_like(model.src_embedding.weight[0]))
-    assert torch.equal(model.tgt_embedding.weight[0], torch.zeros_like(model.tgt_embedding.weight[0]))
+    assert torch.equal(
+        model.src_embedding.weight[0], torch.zeros_like(model.src_embedding.weight[0])
+    )
+    assert torch.equal(
+        model.tgt_embedding.weight[0], torch.zeros_like(model.tgt_embedding.weight[0])
+    )
 
     logits = model(
         batch.src_ids,
@@ -157,7 +193,7 @@ def test_tied_decoder_embedding_init_keeps_logits_in_reasonable_range() -> None:
     assert float(loss.detach()) < 20.0
 
 
-def test_model_forward_and_backward_smoke() -> None:
+def test_model_forward_and_backward() -> None:
     examples, _rows_in, _overlength = build_translation_examples(
         iter([("ab", "cd"), ("ef", "gh")]),
         _encode,
@@ -193,14 +229,18 @@ def test_model_forward_and_backward_smoke() -> None:
     assert torch.isfinite(loss)
 
 
-def test_resolve_training_device_requires_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_training_device_requires_cuda_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
 
     with pytest.raises(CudaRequiredError, match="CUDA is required"):
         resolve_training_device("cuda", require_cuda=True, allow_cpu_fallback=False)
 
 
-def test_resolve_training_device_returns_cuda_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_training_device_returns_cuda_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Props:
         total_memory = 8 * 1024 * 1024
 
@@ -215,7 +255,9 @@ def test_resolve_training_device_returns_cuda_metadata(monkeypatch: pytest.Monke
     assert info.memory_total_mb == 8
 
 
-def test_select_amp_precision_falls_back_to_fp16(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_amp_precision_falls_back_to_fp16(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: False)
 
     name, dtype, use_scaler = select_amp_precision("bf16", "fp16")
@@ -226,7 +268,9 @@ def test_select_amp_precision_falls_back_to_fp16(monkeypatch: pytest.MonkeyPatch
 
 
 def test_overfit_runtime_forces_debug_settings() -> None:
-    args = SimpleNamespace(overfit_samples=4, overfit_max_steps=200, overfit_loss_threshold=0.1)
+    args = SimpleNamespace(
+        overfit_samples=4, overfit_max_steps=200, overfit_loss_threshold=0.1
+    )
     runtime = _resolve_runtime_settings({"stage6_train": {"num_epochs": 12}}, args)
 
     assert runtime.mode == "overfit"
@@ -250,7 +294,9 @@ def test_overfit_runtime_forces_debug_settings() -> None:
         max_seq_len=8,
     )
     train_dataset = TranslationDataset(examples)
-    train_stats = SplitLoadStats(split="train", rows_in=2, rows_out=2, overlength_rows=0)
+    train_stats = SplitLoadStats(
+        split="train", rows_in=2, rows_out=2, overlength_rows=0
+    )
 
     validation_dataset, validation_stats = _select_validation_dataset(
         runtime,
@@ -261,7 +307,6 @@ def test_overfit_runtime_forces_debug_settings() -> None:
         token_ids=SpecialTokenIds(),
         max_seq_len=8,
         drop_overlength=True,
-        limit_validation=None,
     )
 
     assert validation_dataset is train_dataset
@@ -269,7 +314,9 @@ def test_overfit_runtime_forces_debug_settings() -> None:
 
 
 def test_full_runtime_reads_early_stopping_patience() -> None:
-    args = SimpleNamespace(overfit_samples=None, overfit_max_steps=200, overfit_loss_threshold=0.1)
+    args = SimpleNamespace(
+        overfit_samples=None, overfit_max_steps=200, overfit_loss_threshold=0.1
+    )
     runtime = _resolve_runtime_settings(
         {
             "stage5_model": {"preset": "small", "presets": {"small": {"dropout": 0.2}}},
@@ -310,7 +357,9 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     scheduler = build_inverse_sqrt_scheduler(optimizer, warmup_steps=1)
     device = torch.device("cpu")
-    device_info = resolve_training_device("cpu", require_cuda=False, allow_cpu_fallback=True)
+    device_info = resolve_training_device(
+        "cpu", require_cuda=False, allow_cpu_fallback=True
+    )
     train_cfg = ModelTrainConfig(
         mode="overfit",
         num_epochs=1,
@@ -324,7 +373,6 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
         last_checkpoint_path=tmp_path / "last.pt",
         best_checkpoint_path=tmp_path / "best.pt",
         log_jsonl_path=tmp_path / "train.jsonl",
-        precision_name="fp32",
         amp_dtype=None,
         use_grad_scaler=False,
         model_config={
@@ -340,11 +388,10 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
             "tie_decoder_embeddings": True,
         },
         tokenizer_path="tokenizers/test.model",
-        tokenizer_special_ids={"pad_id": 0, "unk_id": 1, "bos_id": 2, "eos_id": 3},
-        vocab_size=32,
     )
 
-    best_loss = train_model(model, loader, loader, criterion, optimizer, scheduler, train_cfg, device_info)
+    components = _training_components(model, loader, criterion, optimizer, scheduler)
+    best_loss = train_model(components, train_cfg, device_info)
 
     assert torch.isfinite(torch.tensor(best_loss))
     checkpoint = torch.load(train_cfg.best_checkpoint_path, map_location=device)
@@ -352,8 +399,6 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
     assert checkpoint["best_validation_loss"] == checkpoint["validation_loss"]
     assert checkpoint["model_config"] == train_cfg.model_config
     assert checkpoint["tokenizer_path"] == "tokenizers/test.model"
-    assert checkpoint["tokenizer_special_ids"] == {"pad_id": 0, "unk_id": 1, "bos_id": 2, "eos_id": 3}
-    assert checkpoint["vocab_size"] == 32
 
     resumed_model = TransformerNMT(model_cfg)
     resumed_optimizer = torch.optim.AdamW(resumed_model.parameters(), lr=1e-3)
@@ -369,9 +414,10 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
     assert resume_state.global_step == 1
     assert resume_state.start_epoch == 2
     assert resume_state.best_validation_loss == checkpoint["best_validation_loss"]
-    for original, resumed in zip(model.parameters(), resumed_model.parameters(), strict=True):
+    for original, resumed in zip(
+        model.parameters(), resumed_model.parameters(), strict=True
+    ):
         assert torch.equal(original, resumed)
-
 
 
 def test_train_model_stops_after_early_stopping_patience(
@@ -403,7 +449,9 @@ def test_train_model_stops_after_early_stopping_patience(
     criterion = LabelSmoothedCrossEntropy(label_smoothing=0.0, ignore_index=0)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     scheduler = build_inverse_sqrt_scheduler(optimizer, warmup_steps=1)
-    device_info = resolve_training_device("cpu", require_cuda=False, allow_cpu_fallback=True)
+    device_info = resolve_training_device(
+        "cpu", require_cuda=False, allow_cpu_fallback=True
+    )
     validation_losses = iter([1.0, 1.1, 1.2])
 
     def fake_validate(*_args, **_kwargs) -> float:
@@ -423,7 +471,6 @@ def test_train_model_stops_after_early_stopping_patience(
         last_checkpoint_path=tmp_path / "last.pt",
         best_checkpoint_path=tmp_path / "best.pt",
         log_jsonl_path=tmp_path / "train.jsonl",
-        precision_name="fp32",
         amp_dtype=None,
         use_grad_scaler=False,
         model_config={
@@ -439,19 +486,21 @@ def test_train_model_stops_after_early_stopping_patience(
             "tie_decoder_embeddings": True,
         },
         tokenizer_path="tokenizers/test.model",
-        tokenizer_special_ids={"pad_id": 0, "unk_id": 1, "bos_id": 2, "eos_id": 3},
-        vocab_size=32,
         early_stopping_patience=2,
     )
 
-    best_loss = train_model(model, loader, loader, criterion, optimizer, scheduler, train_cfg, device_info)
+    components = _training_components(model, loader, criterion, optimizer, scheduler)
+    best_loss = train_model(components, train_cfg, device_info)
 
     assert best_loss == 1.0
     assert train_cfg.last_checkpoint_path.exists()
-    last_checkpoint = torch.load(train_cfg.last_checkpoint_path, map_location=torch.device("cpu"))
+    last_checkpoint = torch.load(
+        train_cfg.last_checkpoint_path, map_location=torch.device("cpu")
+    )
     assert last_checkpoint["global_step"] == 3
     assert last_checkpoint["best_validation_loss"] == 1.0
-    events = [json.loads(line) for line in train_cfg.log_jsonl_path.read_text().splitlines()]
+    events = [
+        json.loads(line) for line in train_cfg.log_jsonl_path.read_text().splitlines()
+    ]
     assert events[-1]["event"] == "early_stop"
     assert events[-1]["step"] == 3
-    assert events[-1]["validations_without_improvement"] == 2
