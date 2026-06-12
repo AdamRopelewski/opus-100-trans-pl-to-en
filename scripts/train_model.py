@@ -17,14 +17,19 @@ from src.data.collate import TranslationCollator
 from src.data.translation_dataset import SpecialTokenIds, load_translation_dataset
 from src.model.transformer_nmt import TransformerNMT, TransformerNMTConfig, count_parameters
 from src.train.device import CudaRequiredError, resolve_training_device, select_amp_precision
-from src.train.losses import LabelSmoothedCrossEntropy
-from src.train.scheduler import build_inverse_sqrt_scheduler
-from src.train.stage4 import Stage4ResumeState, Stage4TrainConfig, load_stage4_checkpoint, train_stage4
+from src.train.model import (
+    LabelSmoothedCrossEntropy,
+    ModelResumeState,
+    ModelTrainConfig,
+    build_inverse_sqrt_scheduler,
+    load_model_checkpoint,
+    train_model,
+)
 from src.utils.config import get_nested, load_config
 
 
 @dataclass(frozen=True)
-class Stage4RuntimeSettings:
+class ModelRuntimeSettings:
     mode: str
     overfit_samples: int | None
     micro_batch_size: int
@@ -46,7 +51,7 @@ class Stage4RuntimeSettings:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train Stage 4 PL->EN Transformer on GPU.")
+    parser = argparse.ArgumentParser(description="Train PL->EN Transformer model on GPU.")
     parser.add_argument("--config", type=Path, default=Path("configs/project_config.yaml"), help="Path to project config YAML.")
     parser.add_argument("--overfit-samples", type=int, default=None, help="Train and validate on the first N train pairs.")
     parser.add_argument("--overfit-max-steps", type=int, default=2000, help="Optimizer-step limit for --overfit-samples.")
@@ -68,7 +73,7 @@ def _load_sentencepiece(model_path: Path):
     try:
         import sentencepiece as spm
     except ImportError as exc:
-        raise RuntimeError("Missing dependency: install sentencepiece to train Stage 4.") from exc
+        raise RuntimeError("Missing dependency: install sentencepiece to train model.") from exc
     if not model_path.exists():
         raise FileNotFoundError(f"Tokenizer model not found: {model_path}")
     processor = spm.SentencePieceProcessor(model_file=str(model_path))
@@ -81,7 +86,7 @@ def _seed_everything(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> Stage4RuntimeSettings:
+def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> ModelRuntimeSettings:
     overfit_enabled = args.overfit_samples is not None
     if overfit_enabled and args.overfit_samples <= 0:
         raise ValueError("--overfit-samples must be positive.")
@@ -95,7 +100,7 @@ def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> St
         max_steps = int(args.overfit_max_steps)
         if max_steps <= 0:
             raise ValueError("--overfit-max-steps must be positive.")
-        return Stage4RuntimeSettings(
+        return ModelRuntimeSettings(
             mode="overfit",
             overfit_samples=overfit_samples,
             micro_batch_size=min(32, overfit_samples),
@@ -118,7 +123,7 @@ def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> St
 
     preset_name = str(get_nested(config_data, "stage5_model.preset", "small"))
     early_stopping_patience = get_nested(config_data, "stage6_train.early_stopping_patience", 5)
-    return Stage4RuntimeSettings(
+    return ModelRuntimeSettings(
         mode="full",
         overfit_samples=None,
         micro_batch_size=int(get_nested(config_data, "stage6_train.micro_batch_size", 16)),
@@ -140,7 +145,7 @@ def _resolve_runtime_settings(config_data: dict, args: argparse.Namespace) -> St
     )
 
 
-def _model_config_from_runtime(config_data: dict, tokenizer, token_ids: SpecialTokenIds, max_seq_len: int, runtime: Stage4RuntimeSettings) -> tuple[str, TransformerNMTConfig]:
+def _model_config_from_runtime(config_data: dict, tokenizer, token_ids: SpecialTokenIds, max_seq_len: int, runtime: ModelRuntimeSettings) -> tuple[str, TransformerNMTConfig]:
     preset_name = str(get_nested(config_data, "stage5_model.preset", "small"))
     preset = get_nested(config_data, f"stage5_model.presets.{preset_name}", {})
     return (
@@ -160,7 +165,7 @@ def _model_config_from_runtime(config_data: dict, tokenizer, token_ids: SpecialT
     )
 
 
-def _loader_kwargs(runtime: Stage4RuntimeSettings, collator: TranslationCollator) -> dict:
+def _loader_kwargs(runtime: ModelRuntimeSettings, collator: TranslationCollator) -> dict:
     kwargs = {
         "batch_size": runtime.micro_batch_size,
         "num_workers": runtime.num_workers,
@@ -173,7 +178,7 @@ def _loader_kwargs(runtime: Stage4RuntimeSettings, collator: TranslationCollator
 
 
 def _select_validation_dataset(
-    runtime: Stage4RuntimeSettings,
+    runtime: ModelRuntimeSettings,
     train_dataset,
     train_stats,
     split_files: dict[str, Path],
@@ -201,13 +206,13 @@ def main() -> int:
     config_data = load_config(args.config)
 
     if not bool(get_nested(config_data, "stage4_dataloader.enabled", True)):
-        print("stage4_dataloader.enabled is false, skipping Stage 4 training.")
+        print("stage4_dataloader.enabled is false, skipping model training.")
         return 0
     if not bool(get_nested(config_data, "stage5_model.enabled", True)):
-        print("stage5_model.enabled is false; Stage 4 training needs a model config.", file=sys.stderr)
+        print("stage5_model.enabled is false; model training needs a model config.", file=sys.stderr)
         return 2
     if not bool(get_nested(config_data, "stage6_train.enabled", True)):
-        print("stage6_train.enabled is false; Stage 4 training needs train settings.", file=sys.stderr)
+        print("stage6_train.enabled is false; model training needs train settings.", file=sys.stderr)
         return 2
 
     try:
@@ -308,7 +313,7 @@ def main() -> int:
         limit_samples=1,
     )
     if len(train_dataset) == 0 or len(validation_dataset) == 0 or len(test_dataset) == 0:
-        print(f"Empty Stage 4 dataset after filtering: {train_stats}, {validation_stats}, {test_stats}", file=sys.stderr)
+        print(f"Empty model dataset after filtering: {train_stats}, {validation_stats}, {test_stats}", file=sys.stderr)
         return 5
     print(f"Loaded train: {train_stats.rows_out}/{train_stats.rows_in} rows; overlength={train_stats.overlength_rows}")
     print(
@@ -345,10 +350,10 @@ def main() -> int:
     )
     scheduler = build_inverse_sqrt_scheduler(optimizer, runtime.warmup_steps)
 
-    resume_state = Stage4ResumeState(start_epoch=1, global_step=0, best_validation_loss=float("inf"))
+    resume_state = ModelResumeState(start_epoch=1, global_step=0, best_validation_loss=float("inf"))
     if args.resume is not None:
         try:
-            resume_state = load_stage4_checkpoint(args.resume, model, optimizer, scheduler, device_info.device)
+            resume_state = load_model_checkpoint(args.resume, model, optimizer, scheduler, device_info.device)
         except Exception as exc:
             print(f"Failed to resume from {args.resume}: {exc}", file=sys.stderr)
             return 7
@@ -363,7 +368,7 @@ def main() -> int:
         "bos_id": token_ids.bos_id,
         "eos_id": token_ids.eos_id,
     }
-    train_cfg = Stage4TrainConfig(
+    train_cfg = ModelTrainConfig(
         mode=runtime.mode,
         num_epochs=runtime.num_epochs,
         grad_accum_steps=runtime.grad_accum_steps,
@@ -374,9 +379,9 @@ def main() -> int:
         max_steps=runtime.max_steps,
         overfit_loss_threshold=runtime.overfit_loss_threshold,
         early_stopping_patience=runtime.early_stopping_patience,
-        last_checkpoint_path=Path(get_nested(config_data, "stage6_train.output_last_checkpoint", "checkpoints/stage4_last.pt")),
-        best_checkpoint_path=Path(get_nested(config_data, "stage6_train.output_best_checkpoint", "checkpoints/stage4_best.pt")),
-        log_jsonl_path=Path(get_nested(config_data, "stage6_train.log_jsonl", "logs/stage4_train.jsonl")),
+        last_checkpoint_path=Path(get_nested(config_data, "stage6_train.output_last_checkpoint", "checkpoints/model_last.pt")),
+        best_checkpoint_path=Path(get_nested(config_data, "stage6_train.output_best_checkpoint", "checkpoints/model_best.pt")),
+        log_jsonl_path=Path(get_nested(config_data, "stage6_train.log_jsonl", "logs/model_train.jsonl")),
         precision_name=precision_name,
         amp_dtype=amp_dtype,
         use_grad_scaler=use_grad_scaler,
@@ -389,8 +394,8 @@ def main() -> int:
         best_validation_loss=resume_state.best_validation_loss,
     )
 
-    best_loss = train_stage4(model, train_loader, validation_loader, criterion, optimizer, scheduler, train_cfg, device_info)
-    print(f"Stage 4 training complete. Best validation loss: {best_loss:.4f}")
+    best_loss = train_model(model, train_loader, validation_loader, criterion, optimizer, scheduler, train_cfg, device_info)
+    print(f"Model training complete. Best validation loss: {best_loss:.4f}")
     return 0
 
 

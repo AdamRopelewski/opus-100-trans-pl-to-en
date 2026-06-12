@@ -10,14 +10,36 @@ from typing import Any
 import torch
 from torch import nn
 from torch.amp import GradScaler, autocast
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
 from src.data.collate import TranslationBatch
 from src.train.device import DeviceInfo
 
 
+class LabelSmoothedCrossEntropy(nn.Module):
+    def __init__(self, label_smoothing: float = 0.1, ignore_index: int = 0) -> None:
+        super().__init__()
+        self.loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing, ignore_index=ignore_index)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        vocab_size = logits.size(-1)
+        return self.loss(logits.reshape(-1, vocab_size), targets.reshape(-1))
+
+
+def build_inverse_sqrt_scheduler(optimizer: Optimizer, warmup_steps: int) -> LambdaLR:
+    warmup = max(1, warmup_steps)
+
+    def lr_lambda(step: int) -> float:
+        current_step = max(1, step)
+        return min(current_step ** -0.5, current_step * (warmup ** -1.5)) * math.sqrt(warmup)
+
+    return LambdaLR(optimizer, lr_lambda)
+
+
 @dataclass(frozen=True)
-class Stage4TrainConfig:
+class ModelTrainConfig:
     mode: str
     num_epochs: int
     grad_accum_steps: int
@@ -44,7 +66,7 @@ class Stage4TrainConfig:
 
 
 @dataclass(frozen=True)
-class Stage4ResumeState:
+class ModelResumeState:
     start_epoch: int
     global_step: int
     best_validation_loss: float
@@ -60,7 +82,7 @@ def _write_log(path: Path, payload: dict) -> None:
         f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def _checkpoint_config(config: Stage4TrainConfig) -> dict:
+def _checkpoint_config(config: ModelTrainConfig) -> dict:
     payload = asdict(config)
     payload["last_checkpoint_path"] = str(config.last_checkpoint_path)
     payload["best_checkpoint_path"] = str(config.best_checkpoint_path)
@@ -79,8 +101,8 @@ def _count_tokens(batch: TranslationBatch) -> int:
     return src_tokens + tgt_tokens
 
 
-def _config_with_best_loss(config: Stage4TrainConfig, best_validation_loss: float) -> Stage4TrainConfig:
-    return Stage4TrainConfig(**{**asdict(config), "best_validation_loss": best_validation_loss})
+def _config_with_best_loss(config: ModelTrainConfig, best_validation_loss: float) -> ModelTrainConfig:
+    return ModelTrainConfig(**{**asdict(config), "best_validation_loss": best_validation_loss})
 
 
 def _save_checkpoint(
@@ -91,7 +113,7 @@ def _save_checkpoint(
     epoch: int,
     step: int,
     validation_loss: float | None,
-    config: Stage4TrainConfig,
+    config: ModelTrainConfig,
     device_info: DeviceInfo,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,13 +140,13 @@ def _save_checkpoint(
     )
 
 
-def load_stage4_checkpoint(
+def load_model_checkpoint(
     path: Path,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     device: torch.device,
-) -> Stage4ResumeState:
+) -> ModelResumeState:
     checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -132,7 +154,7 @@ def load_stage4_checkpoint(
     global_step = int(checkpoint.get("global_step", checkpoint.get("step", 0)))
     epoch = int(checkpoint.get("epoch", 0))
     best_validation_loss = float(checkpoint.get("best_validation_loss", checkpoint.get("validation_loss", math.inf)))
-    return Stage4ResumeState(
+    return ModelResumeState(
         start_epoch=epoch + 1,
         global_step=global_step,
         best_validation_loss=best_validation_loss,
@@ -169,14 +191,14 @@ def validate(
     return total_loss / total_batches
 
 
-def train_stage4(
+def train_model(
     model: nn.Module,
     train_loader: DataLoader[TranslationBatch],
     validation_loader: DataLoader[TranslationBatch],
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
-    config: Stage4TrainConfig,
+    config: ModelTrainConfig,
     device_info: DeviceInfo,
 ) -> float:
     device = device_info.device

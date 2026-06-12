@@ -129,7 +129,7 @@ Tokenizer verification report includes:
 ## Stage 4: PyTorch GPU Training
 
 Script:
-- `scripts/train_stage4.py`
+- `scripts/train_model.py`
 
 What it does:
 - Reads processed train/validation/test parquet splits from `data/processed/en-pl`.
@@ -139,9 +139,9 @@ What it does:
 - Dynamically pads batches, creates source/target padding masks, and creates the decoder causal mask.
 - Trains a compact `nn.Transformer` encoder-decoder model using AdamW, inverse-sqrt warmup scheduling, gradient accumulation, gradient clipping, label smoothing, and CUDA AMP.
 - Saves checkpoints:
-  - `checkpoints/stage4_last.pt`
-  - `checkpoints/stage4_best.pt`
-- Writes JSONL training logs to `logs/stage4_train.jsonl`.
+  - `checkpoints/model_last.pt`
+  - `checkpoints/model_best.pt`
+- Writes JSONL training logs to `logs/model_train.jsonl`.
 
 GPU behavior:
 - `stage6_train.require_cuda: true`
@@ -192,7 +192,7 @@ From repo root:
 python scripts/data_audit.py --config configs/project_config.yaml
 python scripts/clean_data.py --config configs/project_config.yaml
 python scripts/train_tokenizer.py --config configs/project_config.yaml
-python scripts/train_stage4.py --config configs/project_config.yaml
+python scripts/train_model.py --config configs/project_config.yaml
 ```
 
 Verbose audit mode (prints batch preview rows, parsed label counts, and running totals):
@@ -217,6 +217,6 @@ ollama pull qwen2.5:7b
 
 Note on config scope:
 - `stage3_tokenizer` trains a shared SentencePiece BPE tokenizer and writes `reports/tokenizer_stats.md`.
-- `stage4_dataloader`, `stage5_model`, and `stage6_train` are used by `scripts/train_stage4.py`.
+- `stage4_dataloader`, `stage5_model`, and `stage6_train` are used by `scripts/train_model.py`.
 - `stage7_eval` and `smoke` remain config sections for later evaluation and quick training checks.
 - Stage 1 through Stage 4 are implemented in code right now.

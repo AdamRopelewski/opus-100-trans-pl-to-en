@@ -139,9 +139,9 @@ stage6_train:
   log_grad_norm: true
   skip_nan_batches: true
   resume_from_checkpoint: null
-  output_last_checkpoint: checkpoints/stage4_last.pt
-  output_best_checkpoint: checkpoints/stage4_best.pt
-  log_jsonl: logs/stage4_train.jsonl
+  output_last_checkpoint: checkpoints/model_last.pt
+  output_best_checkpoint: checkpoints/model_best.pt
+  log_jsonl: logs/model_train.jsonl
 
 stage7_eval:
   enabled: false

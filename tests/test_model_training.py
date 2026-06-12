@@ -16,7 +16,7 @@ import pytest
 import torch
 
 from src.data.collate import TranslationCollator, make_causal_mask
-from scripts.train_stage4 import _resolve_runtime_settings, _select_validation_dataset
+from scripts.train_model import _resolve_runtime_settings, _select_validation_dataset
 from src.data.translation_dataset import (
     SpecialTokenIds,
     SplitLoadStats,
@@ -26,10 +26,14 @@ from src.data.translation_dataset import (
 )
 from src.model.transformer_nmt import TransformerNMT, TransformerNMTConfig
 from src.train.device import CudaRequiredError, resolve_training_device, select_amp_precision
-from src.train.losses import LabelSmoothedCrossEntropy
-from src.train.scheduler import build_inverse_sqrt_scheduler
-import src.train.stage4 as stage4_module
-from src.train.stage4 import Stage4TrainConfig, load_stage4_checkpoint, train_stage4
+import src.train.model as model_module
+from src.train.model import (
+    LabelSmoothedCrossEntropy,
+    ModelTrainConfig,
+    build_inverse_sqrt_scheduler,
+    load_model_checkpoint,
+    train_model,
+)
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -307,7 +311,7 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
     scheduler = build_inverse_sqrt_scheduler(optimizer, warmup_steps=1)
     device = torch.device("cpu")
     device_info = resolve_training_device("cpu", require_cuda=False, allow_cpu_fallback=True)
-    train_cfg = Stage4TrainConfig(
+    train_cfg = ModelTrainConfig(
         mode="overfit",
         num_epochs=1,
         grad_accum_steps=1,
@@ -340,7 +344,7 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
         vocab_size=32,
     )
 
-    best_loss = train_stage4(model, loader, loader, criterion, optimizer, scheduler, train_cfg, device_info)
+    best_loss = train_model(model, loader, loader, criterion, optimizer, scheduler, train_cfg, device_info)
 
     assert torch.isfinite(torch.tensor(best_loss))
     checkpoint = torch.load(train_cfg.best_checkpoint_path, map_location=device)
@@ -354,7 +358,7 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
     resumed_model = TransformerNMT(model_cfg)
     resumed_optimizer = torch.optim.AdamW(resumed_model.parameters(), lr=1e-3)
     resumed_scheduler = build_inverse_sqrt_scheduler(resumed_optimizer, warmup_steps=1)
-    resume_state = load_stage4_checkpoint(
+    resume_state = load_model_checkpoint(
         train_cfg.best_checkpoint_path,
         resumed_model,
         resumed_optimizer,
@@ -370,7 +374,7 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
 
 
 
-def test_train_stage4_stops_after_early_stopping_patience(
+def test_train_model_stops_after_early_stopping_patience(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     examples, _rows_in, _overlength = build_translation_examples(
@@ -405,8 +409,8 @@ def test_train_stage4_stops_after_early_stopping_patience(
     def fake_validate(*_args, **_kwargs) -> float:
         return next(validation_losses)
 
-    monkeypatch.setattr(stage4_module, "validate", fake_validate)
-    train_cfg = Stage4TrainConfig(
+    monkeypatch.setattr(model_module, "validate", fake_validate)
+    train_cfg = ModelTrainConfig(
         mode="full",
         num_epochs=5,
         grad_accum_steps=1,
@@ -440,7 +444,7 @@ def test_train_stage4_stops_after_early_stopping_patience(
         early_stopping_patience=2,
     )
 
-    best_loss = train_stage4(model, loader, loader, criterion, optimizer, scheduler, train_cfg, device_info)
+    best_loss = train_model(model, loader, loader, criterion, optimizer, scheduler, train_cfg, device_info)
 
     assert best_loss == 1.0
     assert train_cfg.last_checkpoint_path.exists()
