@@ -126,6 +126,7 @@ def load_stage4_checkpoint(
     device: torch.device,
 ) -> Stage4ResumeState:
     checkpoint = torch.load(path, map_location=device)
+    model.to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scheduler.load_state_dict(checkpoint["scheduler_state_dict"])

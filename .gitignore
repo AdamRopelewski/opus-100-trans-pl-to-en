@@ -21,3 +21,6 @@ reports/*
 tokenizers/*.txt
 tokenizers/*.model
 !tokenizers/.gitkeep
+
+checkpoints/*
+zips/*
