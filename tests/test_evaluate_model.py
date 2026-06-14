@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -60,12 +61,12 @@ stage7_eval:
     monkeypatch.setattr(
         evaluate_model,
         "_load_model_bundle",
-        lambda *_args: (object(), object(), object()),
+        lambda *_args: (object(), object(), SimpleNamespace(max_seq_len=128)),
     )
     monkeypatch.setattr(
         evaluate_model,
-        "_translate_text",
-        lambda text, *_args: f"translated: {text}",
+        "_translate_batch",
+        lambda texts, *_args: [f"translated: {text}" for text in texts],
     )
     monkeypatch.setattr(
         evaluate_model,
@@ -105,14 +106,7 @@ stage7_eval:
 
 
 def test_compute_metrics_reports_missing_sacrebleu(monkeypatch) -> None:
-    real_import = __import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "sacrebleu":
-            raise ImportError("missing")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.__import__", fake_import)
+    monkeypatch.setattr(evaluate_model, "sacrebleu", None)
 
     try:
         evaluate_model._compute_metrics(["a"], ["a"])

@@ -140,9 +140,10 @@ stage6_train:
 stage7_eval:
   enabled: true
   inference_checkpoint: checkpoints/model_inference.pt
-  beam_size: 4
+  beam_size: 5
+  batch_size: 8
   length_penalty: 1.0
-  max_new_tokens: 128
+  max_new_tokens: 127
   metrics:
     - sacrebleu
     - chrf
