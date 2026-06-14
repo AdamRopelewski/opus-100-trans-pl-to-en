@@ -26,12 +26,9 @@ reports/*
 
 tokenizers/*.txt
 tokenizers/*.model
-<<<<<<< HEAD
 !tokenizers/.gitkeep
 
 checkpoints/*
 zips/*
-=======
 tokenizers/*.vocab
 !tokenizers/.gitkeep
->>>>>>> 398a3086e96a41c9643ee9bad4b8c1891b9db2a9

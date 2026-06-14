@@ -129,13 +129,9 @@ stage6_train:
   num_epochs: 200
   validate_every_steps: 500
   save_every_steps: 500
-<<<<<<< HEAD
   save_best_by: validation_loss
   early_stopping_patience: 5
   log_grad_norm: true
-=======
-  early_stopping_patience: 3
->>>>>>> 398a3086e96a41c9643ee9bad4b8c1891b9db2a9
   skip_nan_batches: true
   output_last_checkpoint: checkpoints/model_last.pt
   output_best_checkpoint: checkpoints/model_best.pt
