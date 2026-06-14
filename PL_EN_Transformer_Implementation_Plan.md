@@ -261,22 +261,22 @@ Tasks:
 - Implement compact Transformer model, loss, optimizer, scheduler, AMP, checkpointing, and JSONL logging.
 
 Outputs:
-- `scripts/train_stage4.py`
+- `scripts/train_model.py`
 - `src/data/translation_dataset.py`
 - `src/data/collate.py`
 - `src/model/transformer_nmt.py`
 - `src/train/device.py`
 - `src/train/losses.py`
 - `src/train/scheduler.py`
-- `src/train/stage4.py`
-- `checkpoints/stage4_last.pt` during training
-- `checkpoints/stage4_best.pt` during training
-- `logs/stage4_train.jsonl` during training
+- `src/train/model.py`
+- `checkpoints/model_last.pt` during training
+- `checkpoints/model_best.pt` during training
+- `logs/model_train.jsonl` during training
 
 Acceptance checks:
 - Batches have correct tensor shapes.
 - Causal mask blocks future positions.
-- Forward/backward smoke test works.
+- Forward/backward test works.
 
 ---
 
