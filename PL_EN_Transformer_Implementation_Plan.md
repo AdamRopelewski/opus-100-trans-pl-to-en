@@ -343,11 +343,11 @@ Acceptance checks:
 ## Stage 7 - Validation, BLEU, chrF++
 
 Implementation note:
-- Not implemented in code yet.
-- Planned: validation and test evaluation with sacreBLEU/chrF and translation artifacts.
+- Implemented as final test evaluation with sacreBLEU/chrF and translation artifacts.
+- Training-time validation still tracks loss, not BLEU/chrF.
 
 Status:
-- Planned only (not implemented yet).
+- Implemented for final test split evaluation.
 
 Objective:
 - Measure translation quality and prevent overfitting.
@@ -359,9 +359,12 @@ Tasks:
 - Track best checkpoints and optionally average top-k checkpoints.
 
 Outputs:
-- `src/eval/decode.py`
-- `src/eval/metrics.py`
-- `reports/validation_curves.md`
+- `scripts/evaluate_model.py`
+- `scripts/export_inference_checkpoint.py`
+- `checkpoints/model_inference.pt` for eval and manual translation
+- `reports/eval_metrics.json`
+- `reports/translations/test_translations.tsv`
+- `reports/translations/sample_translations.md`
 
 Acceptance checks:
 - Metrics are deterministic for fixed checkpoint and decode settings.

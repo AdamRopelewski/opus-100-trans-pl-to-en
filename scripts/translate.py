@@ -35,7 +35,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--checkpoint",
         type=Path,
         default=None,
-        help="Model checkpoint path. Defaults to stage6_train.output_best_checkpoint.",
+        help="Model checkpoint path. Defaults to stage7_eval.inference_checkpoint when it exists, then stage6_train.output_best_checkpoint.",
     )
     parser.add_argument(
         "--text",
@@ -101,6 +101,15 @@ def _resolve_device(requested: str) -> torch.device:
 def _checkpoint_path(config_data: dict[str, Any], path: Path | None) -> Path:
     if path is not None:
         return path
+    inference_checkpoint = Path(
+        get_nested(
+            config_data,
+            "stage7_eval.inference_checkpoint",
+            "checkpoints/model_inference.pt",
+        )
+    )
+    if inference_checkpoint.exists():
+        return inference_checkpoint
     return Path(
         get_nested(
             config_data,

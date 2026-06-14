@@ -127,10 +127,10 @@ stage6_train:
   micro_batch_size: 48
   grad_accum_steps: 8
   num_epochs: 200
-  validate_every_steps: 500
-  save_every_steps: 500
+  validate_every_steps: 1000
+  save_every_steps: 1000
   save_best_by: validation_loss
-  early_stopping_patience: 5
+  early_stopping_patience: 3
   log_grad_norm: true
   skip_nan_batches: true
   output_last_checkpoint: checkpoints/model_last.pt
@@ -138,7 +138,8 @@ stage6_train:
   log_jsonl: logs/model_train.jsonl
 
 stage7_eval:
-  enabled: false
+  enabled: true
+  inference_checkpoint: checkpoints/model_inference.pt
   beam_size: 4
   length_penalty: 1.0
   max_new_tokens: 128

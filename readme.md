@@ -193,6 +193,8 @@ python scripts/data_audit.py --config configs/project_config.yaml
 python scripts/clean_data.py --config configs/project_config.yaml
 python scripts/train_tokenizer.py --config configs/project_config.yaml
 python scripts/train_model.py --config configs/project_config.yaml
+python scripts/export_inference_checkpoint.py --config configs/project_config.yaml
+python scripts/evaluate_model.py --config configs/project_config.yaml
 python scripts/translate.py --config configs/project_config.yaml --text "Ala ma kota"
 ```
 
@@ -219,5 +221,5 @@ ollama pull qwen2.5:7b
 Note on config scope:
 - `stage3_tokenizer` trains a shared SentencePiece BPE tokenizer and writes `reports/tokenizer_stats.md`.
 - `stage4_dataloader`, `stage5_model`, and `stage6_train` are used by `scripts/train_model.py`.
-- `stage7_eval` remains a config section for later evaluation.
-- Stage 1 through model training are implemented in code right now.
+- `stage7_eval` runs `scripts/evaluate_model.py` and writes BLEU/chrF metrics plus translation samples.
+- Stage 1 through evaluation are implemented in code right now.
