@@ -137,7 +137,7 @@ What it does:
 - Encodes Polish source as source ids plus EOS.
 - Encodes English target as BOS-prefixed decoder input and EOS-suffixed labels.
 - Dynamically pads batches, creates source/target padding masks, and creates the decoder causal mask.
-- Trains a compact `nn.Transformer` encoder-decoder model using AdamW, inverse-sqrt warmup scheduling, gradient accumulation, gradient clipping, label smoothing, and CUDA AMP.
+- Trains the custom `TransformerNMT` encoder-decoder model using AdamW, inverse-sqrt warmup scheduling, gradient accumulation, gradient clipping, label smoothing, and CUDA AMP.
 - Saves checkpoints:
   - `checkpoints/model_last.pt`
   - `checkpoints/model_best.pt`
@@ -193,6 +193,7 @@ python scripts/data_audit.py --config configs/project_config.yaml
 python scripts/clean_data.py --config configs/project_config.yaml
 python scripts/train_tokenizer.py --config configs/project_config.yaml
 python scripts/train_model.py --config configs/project_config.yaml
+python scripts/translate.py --config configs/project_config.yaml --text "Ala ma kota"
 ```
 
 Verbose audit mode (prints batch preview rows, parsed label counts, and running totals):
@@ -219,4 +220,4 @@ Note on config scope:
 - `stage3_tokenizer` trains a shared SentencePiece BPE tokenizer and writes `reports/tokenizer_stats.md`.
 - `stage4_dataloader`, `stage5_model`, and `stage6_train` are used by `scripts/train_model.py`.
 - `stage7_eval` remains a config section for later evaluation.
-- Stage 1 through Stage 4 are implemented in code right now.
+- Stage 1 through model training are implemented in code right now.

@@ -266,8 +266,6 @@ Outputs:
 - `src/data/collate.py`
 - `src/model/transformer_nmt.py`
 - `src/train/device.py`
-- `src/train/losses.py`
-- `src/train/scheduler.py`
 - `src/train/model.py`
 - `checkpoints/model_last.pt` during training
 - `checkpoints/model_best.pt` during training
