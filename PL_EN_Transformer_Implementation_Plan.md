@@ -242,14 +242,14 @@ Status:
 ## Stage 4 - Dataset Pipeline in PyTorch
 
 Implementation note:
-- Not implemented in code yet.
-- Planned scope includes fp16/bf16-safe padding, masks, and batch smoke tests.
+- Implemented as the first runnable training pipeline.
+- Includes dataloading, dynamic padding, masks, compact `nn.Transformer` model and validation-loss checkpointing.
 
 Status:
-- Planned only (not implemented yet).
+- Implemented in code.
 
 Objective:
-- Build efficient train/val/test dataloaders with proper masks.
+- Train PL -> EN from processed parquet splits using the Stage 3 shared SentencePiece tokenizer.
 
 Tasks:
 - Implement dataset class for `(src_ids, tgt_in_ids, tgt_out_ids)`.
@@ -258,17 +258,23 @@ Tasks:
   - source padding mask
   - target padding mask
   - causal mask for decoder self-attention
-- Add length-based bucketing for speed.
+- Implement compact Transformer model, loss, optimizer, scheduler, AMP, checkpointing, and JSONL logging.
 
 Outputs:
-- `src/data/dataset.py`
+- `scripts/train_model.py`
+- `src/data/translation_dataset.py`
 - `src/data/collate.py`
-- `src/data/dataloader.py`
+- `src/model/transformer_nmt.py`
+- `src/train/device.py`
+- `src/train/model.py`
+- `checkpoints/model_last.pt` during training
+- `checkpoints/model_best.pt` during training
+- `logs/model_train.jsonl` during training
 
 Acceptance checks:
 - Batches have correct tensor shapes.
 - Causal mask blocks future positions.
-- No shape mismatch during a forward pass.
+- Forward/backward test works.
 
 ---
 
@@ -337,11 +343,11 @@ Acceptance checks:
 ## Stage 7 - Validation, BLEU, chrF++
 
 Implementation note:
-- Not implemented in code yet.
-- Planned: validation and test evaluation with sacreBLEU/chrF and translation artifacts.
+- Implemented as final test evaluation with sacreBLEU/chrF and translation artifacts.
+- Training-time validation still tracks loss, not BLEU/chrF.
 
 Status:
-- Planned only (not implemented yet).
+- Implemented for final test split evaluation.
 
 Objective:
 - Measure translation quality and prevent overfitting.
@@ -353,9 +359,12 @@ Tasks:
 - Track best checkpoints and optionally average top-k checkpoints.
 
 Outputs:
-- `src/eval/decode.py`
-- `src/eval/metrics.py`
-- `reports/validation_curves.md`
+- `scripts/evaluate_model.py`
+- `scripts/export_inference_checkpoint.py`
+- `checkpoints/model_inference.pt` for eval and manual translation
+- `reports/eval_metrics.json`
+- `reports/translations/test_translations.tsv`
+- `reports/translations/sample_translations.md`
 
 Acceptance checks:
 - Metrics are deterministic for fixed checkpoint and decode settings.
@@ -457,8 +466,8 @@ stage4_dataloader:
 
 stage3_tokenizer:
   type: sentencepiece
-  vocab_size: 32000
-  character_coverage: 0.9995
+  vocab_size: 16000
+  character_coverage: 1.0
   model_prefix: tokenizers/spm_pl_en
 
 stage5_model:

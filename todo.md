@@ -1,6 +1,7 @@
-- stage1 audit: tune uncertain threshold and retry count on a small subset first]
-- stage1: fillter all `-` `\` etc. lets just do whitelisting
-- stage2: consume stage1 labels (keep good, review uncertain) and avoid repeating stage1 heuristics
-- stage2: share sanitizer with stage1 and keep only lightweight final normalization
+- [x] stage1 audit: tune uncertain threshold and retry count on a small subset first]
+- [x] stage1: fillter all `-` `\` etc. lets just do whitelisting
+- [x] stage2: consume stage1 labels (keep good, review uncertain) and avoid repeating stage1 heuristics
+- [x] stage2: share sanitizer with stage1 and keep only lightweight final normalization
+- [x] stage 3 - tokenizer
 - config hygiene: keep all runtime thresholds centralized in project config
 - tests: add unit coverage for llm_audit validation/retry/artifact writing

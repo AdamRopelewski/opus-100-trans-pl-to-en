@@ -14,10 +14,21 @@ data/processed/en-pl/*.parquet
 models/
 !models/.gitkeep
 
+checkpoints/*
+!checkpoints/.gitkeep
+
+logs/*
+!logs/.gitkeep
+
 reports/*
 !reports/.gitkeep
 !reports/tokenizer_stats.md
 
 tokenizers/*.txt
 tokenizers/*.model
+!tokenizers/.gitkeep
+
+checkpoints/*
+zips/*
+tokenizers/*.vocab
 !tokenizers/.gitkeep
