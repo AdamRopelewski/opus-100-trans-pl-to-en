@@ -9,6 +9,7 @@ This document is a step-by-step execution plan for building a Polish to English 
 Build and train a custom encoder-decoder Transformer for `pl -> en` translation that reaches solid baseline quality on OPUS-100 and can be improved in controlled iterations.
 
 Primary goals:
+
 - End-to-end reproducible training pipeline.
 - Stable training on a single `RTX 5070 12GB` GPU.
 - Measurable quality with `sacreBLEU` and `chrF++`.
@@ -18,10 +19,12 @@ Primary goals:
 ## 2) Hardware and Time Assumptions
 
 Target hardware:
+
 - GPU: RTX 5070, 12 GB VRAM.
 - CPU/RAM: standard desktop setup (enough to preprocess and stream data).
 
 Expected training duration (baseline model):
+
 - One epoch: roughly 2 to 5 hours (depends mostly on max sequence length and effective batch tokens).
 - Useful baseline quality: 8 to 15 epochs.
 - Total expected wall time: around 24 to 48 hours (can extend toward 60 to 75 hours if settings are heavy).
@@ -33,6 +36,7 @@ Expected training duration (baseline model):
 Use a Transformer-base style model.
 
 Architecture:
+
 - `d_model = 512`
 - `num_heads = 8`
 - `num_encoder_layers = 6`
@@ -41,11 +45,13 @@ Architecture:
 - `dropout = 0.1`
 
 Tokenization:
+
 - Shared SentencePiece (or BPE) vocabulary for both languages.
 - `vocab_size = 16000` initial run; compare with 24000/32000 if common long words split too much.
 - Special tokens: `PAD`, `BOS`, `EOS`, `UNK`.
 
 Training settings (starting point):
+
 - Optimizer: AdamW (`betas=(0.9, 0.98)`, `eps=1e-9`, `weight_decay=0.01`).
 - Scheduler: warmup + inverse square root decay.
 - Warmup steps: `4000` to `8000`.
@@ -55,6 +61,7 @@ Training settings (starting point):
 - Gradient clipping: `1.0`.
 
 Memory-safe defaults for 12 GB VRAM:
+
 - Start with `max_seq_len = 128`.
 - Use small micro-batch and gradient accumulation.
 - Enable bucketing by sequence length.
@@ -91,6 +98,7 @@ project/
 ```
 
 Notes:
+
 - HF split files are already present in `data/raw/en-pl/`.
 - Keep parquet files out of Git via `.gitignore`.
 - Use one central config file: `configs/project_config.yaml`.
@@ -105,19 +113,23 @@ Each stage has objective, tasks, outputs, and acceptance checks.
 ## Stage 0 - Environment Setup
 
 Objective:
+
 - Prepare a reproducible Python/PyTorch environment.
 
 Tasks:
+
 - Create virtual environment.
 - Install core dependencies: `torch`, `datasets`, `sentencepiece`, `sacrebleu`, `numpy`, `pandas`, `tqdm`, `pyyaml`.
 - Save dependency versions.
 
 Outputs:
+
 - `requirements.txt` or `pyproject.toml`.
 - A short setup command list in `README.md`.
 - Central config file: `configs/project_config.yaml`.
 
 Acceptance checks:
+
 - `python -c "import torch; print(torch.cuda.is_available())"` returns `True`.
 - GPU is visible from PyTorch.
 
@@ -126,9 +138,11 @@ Acceptance checks:
 ## Stage 1 - Data Audit (HF Splits Already Available)
 
 Objective:
+
 - Validate the already downloaded OPUS-100 `en-pl` split files and create a local manifest.
 
 Tasks:
+
 - Read `train`, `validation`, `test` from `data/raw/en-pl/*.parquet`.
 - Report split sizes, null/empty pairs, duplicate pairs.
 - Report length statistics for chars and words in PL/EN.
@@ -145,18 +159,21 @@ Tasks:
 - Save markdown report and JSON manifest.
 
 Outputs:
+
 - Script: `scripts/data_audit.py`.
 - Utility module: `src/utils/llm_audit.py`.
 - Report: `reports/data_audit.md`.
 - Manifest: `reports/data_audit_manifest.json`.
 
 Acceptance checks:
+
 - Split counts are known and documented.
 - No schema surprises in `translation['pl']` and `translation['en']`.
 - Suspicious counts and samples are reported per split.
 - Report reproducible for fixed `project.seed`.
 
 Status:
+
 - Dataset split acquisition from HF is done.
 - Stage 1 implemented.
 
@@ -165,9 +182,11 @@ Status:
 ## Stage 2 - Data Cleaning and Filtering
 
 Objective:
+
 - Remove low-quality pairs safely and prevent train-validation/test leakage.
 
 Tasks:
+
 - Normalize source and target text:
   - Unicode normalization (`NFKC`)
   - strip whitespace
@@ -193,6 +212,7 @@ Tasks:
 - Save cleaned outputs as parquet in `data/processed/en-pl/`.
 
 Outputs:
+
 - Script: `scripts/clean_data.py`.
 - Utility module: `src/utils/clean_data.py`.
 - Clean dataset files in `data/processed/en-pl/`.
@@ -201,11 +221,13 @@ Outputs:
 - Removed examples JSONL: `reports/removed_examples.jsonl`.
 
 Acceptance checks:
+
 - No leaked pair from validation/test remains in train when leakage filter is on.
 - Primary removal reasons and totals are documented.
 - Language-id behavior explicit: enabled, skipped, or strict error.
 
 Status:
+
 - Stage 2 implemented.
 
 ---
@@ -213,28 +235,34 @@ Status:
 ## Stage 3 - Tokenizer Training
 
 Implementation note:
+
 - Implemented with a shared SentencePiece BPE tokenizer and validation stats report.
 
 Objective:
+
 - Train a shared subword tokenizer suitable for Polish morphology and English output.
 
 Tasks:
+
 - Build training text from cleaned `pl` and `en`.
 - Train SentencePiece/BPE tokenizer with initial `vocab_size=16000`.
 - Define and lock special token IDs.
 - Save tokenizer config and model files.
 
 Outputs:
+
 - `tokenizers/spm_pl_en.model`
 - `tokenizers/spm_pl_en.vocab`
 - `reports/tokenizer_stats.md`
 
 Acceptance checks:
+
 - Tokenization and detokenization are stable.
 - Unknown token rate is low on validation split.
 - Common long words split less than rare long words in `reports/tokenizer_stats.md`.
 
 Status:
+
 - Implemented in `scripts/train_tokenizer.py` and `src/utils/tokenizer.py`.
 
 ---
@@ -242,16 +270,20 @@ Status:
 ## Stage 4 - Dataset Pipeline in PyTorch
 
 Implementation note:
+
 - Implemented as the first runnable training pipeline.
 - Includes dataloading, dynamic padding, masks, compact `nn.Transformer` model and validation-loss checkpointing.
 
 Status:
+
 - Implemented in code.
 
 Objective:
+
 - Train PL -> EN from processed parquet splits using the Stage 3 shared SentencePiece tokenizer.
 
 Tasks:
+
 - Implement dataset class for `(src_ids, tgt_in_ids, tgt_out_ids)`.
 - Implement dynamic padding collate function.
 - Implement masks:
@@ -261,6 +293,7 @@ Tasks:
 - Implement compact Transformer model, loss, optimizer, scheduler, AMP, checkpointing, and JSONL logging.
 
 Outputs:
+
 - `scripts/train_model.py`
 - `src/data/translation_dataset.py`
 - `src/data/collate.py`
@@ -272,6 +305,7 @@ Outputs:
 - `logs/model_train.jsonl` during training
 
 Acceptance checks:
+
 - Batches have correct tensor shapes.
 - Causal mask blocks future positions.
 - Forward/backward test works.
@@ -281,26 +315,32 @@ Acceptance checks:
 ## Stage 5 - Model Implementation
 
 Implementation note:
+
 - Not implemented in code yet.
 - Planned presets: `small` and `base`, with explicit embedding tying flags.
 
 Status:
+
 - Planned only (not implemented yet).
 
 Objective:
+
 - Implement encoder-decoder Transformer with multi-head attention.
 
 Tasks:
+
 - Implement embeddings and positional encoding.
 - Implement Transformer model (or wrap `nn.Transformer` cleanly).
 - Add output projection to vocab size.
 - Optional but recommended: tie target embedding and output projection weights.
 
 Outputs:
+
 - `src/model/transformer_nmt.py`
 - Model section inside `configs/project_config.yaml`
 
 Acceptance checks:
+
 - Single forward/backward step works.
 - Parameter count is logged.
 - Inference on toy batch returns token logits without errors.
@@ -310,16 +350,20 @@ Acceptance checks:
 ## Stage 6 - Training Loop and Optimization
 
 Implementation note:
+
 - Not implemented in code yet.
 - Planned: scheduler, checkpointing, precision fallback, NaN handling, resume flow.
 
 Status:
+
 - Planned only (not implemented yet).
 
 Objective:
+
 - Train stably on a 12 GB GPU with reproducible checkpoints.
 
 Tasks:
+
 - Implement train loop with mixed precision.
 - Add gradient accumulation.
 - Add AdamW + LR scheduler + warmup.
@@ -328,12 +372,14 @@ Tasks:
 - Save checkpoints and best model by validation BLEU.
 
 Outputs:
+
 - `src/train/train.py`
 - `src/train/losses.py`
 - `src/train/scheduler.py`
 - Training section inside `configs/project_config.yaml`
 
 Acceptance checks:
+
 - Loss decreases during first few thousand steps.
 - No NaNs or exploding gradients.
 - Training resumes correctly from checkpoint.
@@ -343,22 +389,27 @@ Acceptance checks:
 ## Stage 7 - Validation, BLEU, chrF++
 
 Implementation note:
+
 - Implemented as final test evaluation with sacreBLEU/chrF and translation artifacts.
 - Training-time validation still tracks loss, not BLEU/chrF.
 
 Status:
+
 - Implemented for final test split evaluation.
 
 Objective:
+
 - Measure translation quality and prevent overfitting.
 
 Tasks:
+
 - Implement greedy and beam search decoding.
 - Evaluate on validation split every N steps.
 - Compute `sacreBLEU` and `chrF++`.
 - Track best checkpoints and optionally average top-k checkpoints.
 
 Outputs:
+
 - `scripts/evaluate_model.py`
 - `scripts/export_inference_checkpoint.py`
 - `checkpoints/model_inference.pt` for eval and manual translation
@@ -367,6 +418,7 @@ Outputs:
 - `reports/translations/sample_translations.md`
 
 Acceptance checks:
+
 - Metrics are deterministic for fixed checkpoint and decode settings.
 - Validation trend improves over early epochs.
 
@@ -375,21 +427,26 @@ Acceptance checks:
 ## Stage 8 - Final Test Evaluation
 
 Status:
+
 - Planned only (not implemented yet).
 
 Objective:
+
 - Produce final benchmark numbers and example translations.
 
 Tasks:
+
 - Run final decode on test split.
 - Report BLEU and chrF++.
 - Provide qualitative examples (good, medium, bad translations).
 - Analyze common error categories.
 
 Outputs:
+
 - `reports/final_test_report.md`
 
 Acceptance checks:
+
 - Final metrics and decoding settings are fully documented.
 - Report includes reproducibility info (seed, config, checkpoint path).
 
@@ -398,12 +455,15 @@ Acceptance checks:
 ## Stage 9 - Iteration Plan (After Baseline)
 
 Status:
+
 - Planned only (not implemented yet).
 
 Objective:
+
 - Improve quality in controlled experiments.
 
 Priority order:
+
 1. Better data filtering (highest ROI on OPUS-style mixed corpora).
 2. Decode tuning (`beam`, `length_penalty`).
 3. Increase max sequence length to 192 or 256 if memory allows.
@@ -411,9 +471,11 @@ Priority order:
 5. Optional domain fine-tuning.
 
 Outputs:
+
 - `reports/ablation_study.md`
 
 Acceptance checks:
+
 - Each experiment changes one major variable.
 - Metrics are compared under identical evaluation settings.
 
@@ -499,6 +561,7 @@ stage7_eval:
 ```
 
 Note:
+
 - Keep all stage options in single `configs/project_config.yaml`.
 - `micro_batch_size` and `grad_accum_steps` are placeholders. Tune by VRAM usage.
 
@@ -507,15 +570,19 @@ Note:
 ## 7) Risk List and Mitigations
 
 1. Out-of-memory errors:
+
 - Reduce `max_seq_len`, then micro-batch, then enable gradient checkpointing.
 
-2. Slow training throughput:
+1. Slow training throughput:
+
 - Use bucketing, increase dataloader workers, profile CPU bottlenecks.
 
-3. Quality plateau too early:
+1. Quality plateau too early:
+
 - Improve filtering quality, tune LR schedule, and decode settings.
 
-4. Noisy translations from mixed OPUS domains:
+1. Noisy translations from mixed OPUS domains:
+
 - Add stricter cleaning and optional domain fine-tuning.
 
 ---
@@ -523,6 +590,7 @@ Note:
 ## 8) Definition of Done
 
 Project is complete when:
+
 - End-to-end training is reproducible from a single config file.
 - Best checkpoint is selected on validation BLEU/chrF++.
 - Final test report contains metrics, configs, and translation examples.
@@ -531,7 +599,6 @@ Project is complete when:
 ---
 
 ## 9) Next Immediate Actions
-
 
 1. Train tokenizer and freeze vocabulary.
 2. Implement model and run a tiny overfit test before full training.
