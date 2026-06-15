@@ -93,7 +93,7 @@ def parse_args() -> CleanConfig:
     parser.add_argument("--min-tokens", type=int, default=5)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--max-length-ratio", type=float, default=2.5)
-    parser.add_argument("--bicleaner-model", default="bitextor/bicleaner-ai-full-en-xx")
+    parser.add_argument("--bicleaner-model", default="bitextor/bicleaner-ai-full-en-pl")
     parser.add_argument("--skip-bicleaner", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -301,7 +301,7 @@ def run_bicleaner(candidates_path: Path, scored_path: Path, cfg: CleanConfig) ->
     if executable is None:
         raise RuntimeError("bicleaner-ai-classify not found. On Windows use --skip-bicleaner or run Bicleaner in WSL/Docker.")
     ensure_writable([scored_path], cfg.overwrite)
-    command = [executable, str(candidates_path), str(scored_path), cfg.bicleaner_model, "en", "xx"]
+    command = [executable, str(candidates_path), str(scored_path), cfg.bicleaner_model, "en", "pl"]
     result = subprocess.run(command, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Bicleaner failed. Command: {' '.join(command)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
@@ -365,17 +365,24 @@ def write_outputs(pairs: list[Pair], cfg: CleanConfig, schema: Schema, counts: d
 
 def main() -> int:
     cfg = parse_args()
+    candidates_path = cfg.work_dir / "candidates.en-pl.tsv"
+    scored_path = cfg.work_dir / "scored.tsv"
+    out_paths = [cfg.out_dir / "train.pl", cfg.out_dir / "train.en", cfg.out_dir / "train.tsv", cfg.out_dir / "stats.json"]
+    preflight_paths = [candidates_path, *out_paths]
+    if not cfg.skip_bicleaner:
+        preflight_paths.append(scored_path)
+    ensure_writable(preflight_paths, cfg.overwrite)
+
     dataset = load_tatoeba(cfg)
     schema = detect_schema(dataset)
     print(f"Rows raw: {len(dataset)}")
     print(f"Schema: {schema.kind}, EN={schema.en_field}, PL={schema.pl_field}")
     pairs, counts = basic_clean(dataset, schema, cfg)
     print(f"Rows after basic clean: {counts['after_basic_clean']}")
+    print(f"Rows dropped by basic clean: {counts['raw_rows'] - counts['after_basic_clean']}")
     print(f"Rows after dedup: {counts['after_dedup']}")
     print(f"Rows after max rows: {counts['after_max_rows']}")
 
-    candidates_path = cfg.work_dir / "candidates.en-pl.tsv"
-    scored_path = cfg.work_dir / "scored.tsv"
     write_candidates(pairs, candidates_path, cfg.overwrite)
     print(f"Wrote candidates: {candidates_path}")
 
