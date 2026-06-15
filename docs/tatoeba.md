@@ -72,3 +72,32 @@ python scripts/clean_tatoeba.py --skip-bicleaner --max-rows 200000 --overwrite
 ```
 
 For Bicleaner scoring, use WSL/Docker or any env where `bicleaner-ai-classify` works.
+
+## Bicleaner In Docker
+
+Use a separate Bicleaner venv only for cleaning. Torch stays system-wide in Docker for training. `scripts/clean_tatoeba.py` auto-runs `bicleaner-ai-classify` from `.venv-bicleaner` when it exists.
+
+Create and install once:
+
+```bash
+bash scripts/setup_bicleaner_venv.sh
+```
+
+The setup script creates `.venv-bicleaner` and `.venv-bicleaner/bin/activate-bicleaner-cuda`.
+
+Clean with Bicleaner:
+
+```bash
+python scripts/clean_tatoeba.py --max-rows 200000 --overwrite
+```
+
+Manual run, if needed:
+
+```bash
+. .venv-bicleaner/bin/activate
+. .venv-bicleaner/bin/activate-bicleaner-cuda
+python scripts/clean_tatoeba.py --max-rows 200000 --overwrite
+deactivate
+```
+
+`scripts/clean_tatoeba.py` passes `--disable_hardrules` to Bicleaner because basic hard filtering is already handled by the script. Progress tracks written rows in `data/work/tatoeba/scored.tsv` and refreshes about every 10 seconds. Auto-run uses venv only for Bicleaner subprocess; parent shell remains unchanged.

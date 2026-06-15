@@ -37,6 +37,7 @@ CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 DEFAULT_BICLEANER_MODEL = "bitextor/bicleaner-ai-full-en-pl"
+BICLEANER_VENV_DIR = PROJECT_ROOT / ".venv-bicleaner"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class CleanConfig:
     bicleaner_require_gpu: bool
     bicleaner_mixed_precision: bool
     skip_bicleaner: bool
+    reuse_candidates: bool
     overwrite: bool
     unicode_normalization: str
     strip_whitespace: bool
@@ -103,6 +105,7 @@ def parse_args() -> CleanConfig:
     parser.add_argument("--bicleaner-require-gpu", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bicleaner-mixed-precision", action="store_true")
     parser.add_argument("--skip-bicleaner", action="store_true")
+    parser.add_argument("--reuse-candidates", action="store_true", help="Skip dataset loading/basic clean and reuse work-dir/candidates.en-pl.tsv.")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -149,6 +152,7 @@ def parse_args() -> CleanConfig:
         bicleaner_require_gpu=args.bicleaner_require_gpu,
         bicleaner_mixed_precision=args.bicleaner_mixed_precision,
         skip_bicleaner=args.skip_bicleaner,
+        reuse_candidates=args.reuse_candidates,
         overwrite=args.overwrite,
         unicode_normalization=str(get_nested(project_cfg, "stage2_cleaning.filters.unicode_normalization", "NFKC")),
         strip_whitespace=bool(get_nested(project_cfg, "stage2_cleaning.filters.strip_whitespace", True)),
@@ -315,14 +319,69 @@ def write_candidates(pairs: list[Pair], path: Path, overwrite: bool) -> None:
             handle.write(f"dummy_en\tdummy_pl\t{pair.en}\t{pair.pl}\n")
 
 
-def run_bicleaner(candidates_path: Path, scored_path: Path, cfg: CleanConfig) -> None:
+def read_candidates(path: Path, cfg: CleanConfig) -> list[Pair]:
+    pairs: list[Pair] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 4:
+                raise ValueError(f"Cannot recover EN/PL at {path}:{line_number}")
+            pairs.append(Pair(pl=normalize(parts[3], cfg), en=normalize(parts[2], cfg), score=1.0))
+    return pairs
+
+
+def resolve_bicleaner_executable() -> Path | str:
+    candidates = [
+        BICLEANER_VENV_DIR / "bin" / "bicleaner-ai-classify",
+        BICLEANER_VENV_DIR / "Scripts" / "bicleaner-ai-classify.exe",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     executable = shutil.which("bicleaner-ai-classify")
-    if executable is None:
-        raise RuntimeError("bicleaner-ai-classify not found. On Windows use --skip-bicleaner or run Bicleaner in WSL/Docker.")
+    if executable is not None:
+        return executable
+    raise RuntimeError("bicleaner-ai-classify not found. Create .venv-bicleaner with scripts/setup_bicleaner_venv.sh, or use --skip-bicleaner.")
+
+
+def bicleaner_env(executable: Path | str) -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
+    env.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
+
+    executable_path = Path(executable)
+    if BICLEANER_VENV_DIR in executable_path.parents:
+        bin_dir = executable_path.parent
+        env["VIRTUAL_ENV"] = str(BICLEANER_VENV_DIR)
+        env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+
+        site_packages = sorted((BICLEANER_VENV_DIR / "lib").glob("python*/site-packages"))
+        if site_packages:
+            nvidia_libs = [
+                "cuda_runtime/lib",
+                "cublas/lib",
+                "cuda_cupti/lib",
+                "cudnn/lib",
+                "cufft/lib",
+                "curand/lib",
+                "cusolver/lib",
+                "cusparse/lib",
+                "nccl/lib",
+                "nvjitlink/lib",
+            ]
+            cuda_paths = [str(site_packages[0] / "nvidia" / lib) for lib in nvidia_libs]
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(cuda_paths + [env.get("LD_LIBRARY_PATH", "")])
+    return env
+
+
+def run_bicleaner(candidates_path: Path, scored_path: Path, cfg: CleanConfig) -> None:
+    executable = resolve_bicleaner_executable()
     ensure_writable([scored_path], cfg.overwrite)
+    if cfg.overwrite:
+        scored_path.unlink(missing_ok=True)
     model_path = ensure_bicleaner_model(cfg.bicleaner_model)
     command = [
-        executable,
+        str(executable),
         "-s",
         "en",
         "-t",
@@ -331,6 +390,7 @@ def run_bicleaner(candidates_path: Path, scored_path: Path, cfg: CleanConfig) ->
         "3",
         "--tcol",
         "4",
+        "--disable_hardrules",
     ]
     if cfg.bicleaner_require_gpu:
         command.append("--require_gpu")
@@ -339,19 +399,17 @@ def run_bicleaner(candidates_path: Path, scored_path: Path, cfg: CleanConfig) ->
     command.extend([str(candidates_path), str(scored_path), str(model_path)])
     total_rows = count_lines(candidates_path)
     log_path = cfg.work_dir / "bicleaner.log"
-    env = os.environ.copy()
-    env.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
-    env.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
+    env = bicleaner_env(executable)
     with log_path.open("w", encoding="utf-8", newline="\n") as log_file:
         process = subprocess.Popen(command, text=True, stdout=log_file, stderr=subprocess.STDOUT, env=env)
         if tqdm is not None and total_rows > 0:
-            with tqdm(total=total_rows, desc="Bicleaner", unit="rows") as progress:
+            with tqdm(total=total_rows, desc="Bicleaner", unit="rows", mininterval=10.0) as progress:
                 last_rows = 0
                 while process.poll() is None:
                     current_rows = count_lines(scored_path) if scored_path.exists() else 0
                     progress.update(max(0, current_rows - last_rows))
                     last_rows = current_rows
-                    time.sleep(0.5)
+                    time.sleep(10.0)
                 current_rows = count_lines(scored_path) if scored_path.exists() else last_rows
                 progress.update(max(0, current_rows - last_rows))
                 if process.returncode == 0 and progress.n < total_rows:
@@ -464,6 +522,7 @@ def write_outputs(pairs: list[Pair], cfg: CleanConfig, schema: Schema, counts: d
         "max_length_ratio": cfg.max_length_ratio,
         "clean_batch_size": cfg.clean_batch_size,
         "skip_bicleaner": cfg.skip_bicleaner,
+        "reuse_candidates": cfg.reuse_candidates,
         "bicleaner_require_gpu": cfg.bicleaner_require_gpu,
         "bicleaner_mixed_precision": cfg.bicleaner_mixed_precision,
         "after_bicleaner": len(pairs),
@@ -479,23 +538,41 @@ def main() -> int:
     candidates_path = cfg.work_dir / "candidates.en-pl.tsv"
     scored_path = cfg.work_dir / "scored.tsv"
     out_paths = [cfg.out_dir / "train.pl", cfg.out_dir / "train.en", cfg.out_dir / "train.tsv", cfg.out_dir / "stats.json"]
-    preflight_paths = [candidates_path, *out_paths]
+    if cfg.reuse_candidates and not candidates_path.exists():
+        raise FileNotFoundError(f"--reuse-candidates requires existing file: {candidates_path}")
+
+    preflight_paths = [*out_paths]
+    if not cfg.reuse_candidates:
+        preflight_paths.append(candidates_path)
     if not cfg.skip_bicleaner:
+        resolve_bicleaner_executable()
         preflight_paths.append(scored_path)
     ensure_writable(preflight_paths, cfg.overwrite)
 
-    dataset = load_tatoeba(cfg)
-    schema = detect_schema(dataset)
-    print(f"Rows raw: {len(dataset)}")
-    print(f"Schema: {schema.kind}, EN={schema.en_field}, PL={schema.pl_field}")
-    pairs, counts = basic_clean(dataset, schema, cfg)
-    print(f"Rows after basic clean: {counts['after_basic_clean']}")
-    print(f"Rows dropped by basic clean: {counts['raw_rows'] - counts['after_basic_clean']}")
-    print(f"Rows after dedup: {counts['after_dedup']}")
-    print(f"Rows after max rows: {counts['after_max_rows']}")
+    if cfg.reuse_candidates:
+        pairs = read_candidates(candidates_path, cfg)
+        counts = {
+            "raw_rows": len(pairs),
+            "after_basic_clean": len(pairs),
+            "after_dedup": len(pairs),
+            "after_max_rows": len(pairs),
+        }
+        schema = Schema("candidates", "column_3", "column_4", ["dummy_en", "dummy_pl", "en", "pl"], {})
+        print(f"Reused candidates: {candidates_path}")
+        print(f"Rows candidates: {len(pairs)}")
+    else:
+        dataset = load_tatoeba(cfg)
+        schema = detect_schema(dataset)
+        print(f"Rows raw: {len(dataset)}")
+        print(f"Schema: {schema.kind}, EN={schema.en_field}, PL={schema.pl_field}")
+        pairs, counts = basic_clean(dataset, schema, cfg)
+        print(f"Rows after basic clean: {counts['after_basic_clean']}")
+        print(f"Rows dropped by basic clean: {counts['raw_rows'] - counts['after_basic_clean']}")
+        print(f"Rows after dedup: {counts['after_dedup']}")
+        print(f"Rows after max rows: {counts['after_max_rows']}")
 
-    write_candidates(pairs, candidates_path, cfg.overwrite)
-    print(f"Wrote candidates: {candidates_path}")
+        write_candidates(pairs, candidates_path, cfg.overwrite)
+        print(f"Wrote candidates: {candidates_path}")
 
     if cfg.skip_bicleaner:
         final_pairs = [Pair(pair.pl, pair.en, 1.0) for pair in pairs]

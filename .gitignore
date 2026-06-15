@@ -41,4 +41,4 @@ zips/*
 tokenizers/*.vocab
 !tokenizers/.gitkeep
 
-
+.venv-bicleaner/*
