@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import shutil
 import subprocess
 import sys
+import time
 import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -34,7 +36,7 @@ WHITESPACE_RE = re.compile(r"\s+")
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
 HTML_TAG_RE = re.compile(r"<[^>]+>")
-ALNUM_RE = re.compile(r"[\wĄąĆćĘęŁłŃńÓóŚśŹźŻż]", re.UNICODE)
+DEFAULT_BICLEANER_MODEL = "bitextor/bicleaner-ai-full-en-pl"
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,10 @@ class CleanConfig:
     min_tokens: int
     max_tokens: int
     max_length_ratio: float
+    clean_batch_size: int
     bicleaner_model: str
+    bicleaner_require_gpu: bool
+    bicleaner_mixed_precision: bool
     skip_bicleaner: bool
     overwrite: bool
     unicode_normalization: str
@@ -93,7 +98,10 @@ def parse_args() -> CleanConfig:
     parser.add_argument("--min-tokens", type=int, default=5)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--max-length-ratio", type=float, default=2.5)
-    parser.add_argument("--bicleaner-model", default="bitextor/bicleaner-ai-full-en-pl")
+    parser.add_argument("--clean-batch-size", type=int, default=50_000)
+    parser.add_argument("--bicleaner-model", default=DEFAULT_BICLEANER_MODEL)
+    parser.add_argument("--bicleaner-require-gpu", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--bicleaner-mixed-precision", action="store_true")
     parser.add_argument("--skip-bicleaner", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -119,6 +127,8 @@ def parse_args() -> CleanConfig:
         parser.error("--max-tokens must be > 0")
     if args.max_length_ratio < 1.0:
         parser.error("--max-length-ratio must be >= 1.0")
+    if args.clean_batch_size <= 0:
+        parser.error("--clean-batch-size must be > 0")
 
     return CleanConfig(
         project_config=args.project_config,
@@ -134,7 +144,10 @@ def parse_args() -> CleanConfig:
         min_tokens=args.min_tokens,
         max_tokens=max_tokens,
         max_length_ratio=args.max_length_ratio,
+        clean_batch_size=args.clean_batch_size,
         bicleaner_model=args.bicleaner_model,
+        bicleaner_require_gpu=args.bicleaner_require_gpu,
+        bicleaner_mixed_precision=args.bicleaner_mixed_precision,
         skip_bicleaner=args.skip_bicleaner,
         overwrite=args.overwrite,
         unicode_normalization=str(get_nested(project_cfg, "stage2_cleaning.filters.unicode_normalization", "NFKC")),
@@ -223,7 +236,8 @@ def mostly_punctuation(text: str) -> bool:
     non_space = sum(1 for char in text if not char.isspace())
     if non_space == 0:
         return True
-    return len(ALNUM_RE.findall(text)) / non_space < 0.35
+    alnum = sum(1 for char in text if char.isalnum())
+    return alnum / non_space < 0.35
 
 
 def reject_reason(pair: Pair, cfg: CleanConfig) -> str | None:
@@ -250,28 +264,33 @@ def reject_reason(pair: Pair, cfg: CleanConfig) -> str | None:
 def basic_clean(dataset: Dataset, schema: Schema, cfg: CleanConfig) -> tuple[list[Pair], dict[str, int]]:
     counts = {"raw_rows": len(dataset), "after_basic_clean": 0, "after_dedup": 0, "after_max_rows": 0}
     dropped: dict[str, int] = {}
-    pairs: list[Pair] = []
-    iterator: Iterable[dict[str, Any]] = dataset
-    if tqdm is not None:
-        iterator = tqdm(dataset, desc="Clean Tatoeba", unit="rows")
-    for row in iterator:
-        pair = extract_pair(dict(row), schema, cfg)
-        reason = reject_reason(pair, cfg)
-        if reason:
-            dropped[reason] = dropped.get(reason, 0) + 1
-            continue
-        pairs.append(pair)
-    counts["after_basic_clean"] = len(pairs)
-
-    seen: set[tuple[str, str]] = set()
     deduped: list[Pair] = []
-    for pair in pairs:
-        key = (pair.pl.lower(), pair.en.lower())
-        if key in seen:
-            dropped["duplicate"] = dropped.get("duplicate", 0) + 1
-            continue
-        seen.add(key)
-        deduped.append(pair)
+    seen: set[tuple[str, str]] = set()
+    iterator = dataset.iter(batch_size=cfg.clean_batch_size)
+    if tqdm is not None:
+        iterator = tqdm(iterator, total=(len(dataset) + cfg.clean_batch_size - 1) // cfg.clean_batch_size, desc="Clean Tatoeba", unit="batch")
+    for batch in iterator:
+        if schema.kind == "translation":
+            translations = batch["translation"]
+            en_values = [item.get(schema.en_field, "") if isinstance(item, dict) else "" for item in translations]
+            pl_values = [item.get(schema.pl_field, "") if isinstance(item, dict) else "" for item in translations]
+        else:
+            en_values = batch[schema.en_field]
+            pl_values = batch[schema.pl_field]
+
+        for en_raw, pl_raw in zip(en_values, pl_values, strict=True):
+            pair = Pair(pl=normalize(str(pl_raw), cfg), en=normalize(str(en_raw), cfg))
+            reason = reject_reason(pair, cfg)
+            if reason:
+                dropped[reason] = dropped.get(reason, 0) + 1
+                continue
+            counts["after_basic_clean"] += 1
+            key = (pair.pl.lower(), pair.en.lower())
+            if key in seen:
+                dropped["duplicate"] = dropped.get("duplicate", 0) + 1
+                continue
+            seen.add(key)
+            deduped.append(pair)
     counts["after_dedup"] = len(deduped)
 
     random.Random(cfg.seed).shuffle(deduped)
@@ -301,10 +320,99 @@ def run_bicleaner(candidates_path: Path, scored_path: Path, cfg: CleanConfig) ->
     if executable is None:
         raise RuntimeError("bicleaner-ai-classify not found. On Windows use --skip-bicleaner or run Bicleaner in WSL/Docker.")
     ensure_writable([scored_path], cfg.overwrite)
-    command = [executable, str(candidates_path), str(scored_path), cfg.bicleaner_model, "en", "pl"]
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    model_path = ensure_bicleaner_model(cfg.bicleaner_model)
+    command = [
+        executable,
+        "-s",
+        "en",
+        "-t",
+        "pl",
+        "--scol",
+        "3",
+        "--tcol",
+        "4",
+    ]
+    if cfg.bicleaner_require_gpu:
+        command.append("--require_gpu")
+    if cfg.bicleaner_mixed_precision:
+        command.append("--mixed_precision")
+    command.extend([str(candidates_path), str(scored_path), str(model_path)])
+    total_rows = count_lines(candidates_path)
+    log_path = cfg.work_dir / "bicleaner.log"
+    env = os.environ.copy()
+    env.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
+    env.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
+    with log_path.open("w", encoding="utf-8", newline="\n") as log_file:
+        process = subprocess.Popen(command, text=True, stdout=log_file, stderr=subprocess.STDOUT, env=env)
+        if tqdm is not None and total_rows > 0:
+            with tqdm(total=total_rows, desc="Bicleaner", unit="rows") as progress:
+                last_rows = 0
+                while process.poll() is None:
+                    current_rows = count_lines(scored_path) if scored_path.exists() else 0
+                    progress.update(max(0, current_rows - last_rows))
+                    last_rows = current_rows
+                    time.sleep(0.5)
+                current_rows = count_lines(scored_path) if scored_path.exists() else last_rows
+                progress.update(max(0, current_rows - last_rows))
+                if process.returncode == 0 and progress.n < total_rows:
+                    progress.update(total_rows - progress.n)
+        else:
+            process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(f"Bicleaner failed. Command: {' '.join(command)}\nLog: {log_path}\n{tail_text(log_path)}")
+
+
+def ensure_bicleaner_model(model: str) -> Path | str:
+    model_path = Path(model)
+    if model_path.exists():
+        return model_path
+    if "/" not in model:
+        return model
+
+    local_dir = PROJECT_ROOT / "models" / model
+    complete_marker = local_dir / ".download_complete"
+    if complete_marker.exists():
+        return local_dir
+
+    executable = shutil.which("hf") or shutil.which("huggingface-cli")
+    if executable is None:
+        raise RuntimeError(f"Bicleaner model missing: {local_dir}. Install Hugging Face CLI or download {model} manually.")
+
+    local_dir.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update(load_dotenv_values(PROJECT_ROOT / ".env"))
+    command = [executable, "download", model, "--local-dir", str(local_dir)]
+    print(f"Downloading Bicleaner model: {model} -> {local_dir}")
+    result = subprocess.run(command, check=False, env=env)
     if result.returncode != 0:
-        raise RuntimeError(f"Bicleaner failed. Command: {' '.join(command)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        raise RuntimeError(f"Failed to download Bicleaner model. Command: {' '.join(command)}")
+    complete_marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    return local_dir
+
+
+def load_dotenv_values(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def count_lines(path: Path) -> int:
+    with path.open("rb") as handle:
+        return sum(1 for _ in handle)
+
+
+def tail_text(path: Path, max_chars: int = 4000) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return text[-max_chars:]
 
 
 def last_float(parts: list[str]) -> float | None:
@@ -354,7 +462,10 @@ def write_outputs(pairs: list[Pair], cfg: CleanConfig, schema: Schema, counts: d
         "min_tokens": cfg.min_tokens,
         "max_tokens": cfg.max_tokens,
         "max_length_ratio": cfg.max_length_ratio,
+        "clean_batch_size": cfg.clean_batch_size,
         "skip_bicleaner": cfg.skip_bicleaner,
+        "bicleaner_require_gpu": cfg.bicleaner_require_gpu,
+        "bicleaner_mixed_precision": cfg.bicleaner_mixed_precision,
         "after_bicleaner": len(pairs),
         "schema": asdict(schema),
         "counts": counts,

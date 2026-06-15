@@ -1,6 +1,11 @@
 # Virtual environment
 venv/
 
+# Local secrets
+.env
+.env.*
+!.env.example
+
 # Python cache artifacts
 __pycache__/
 *.pyc
@@ -10,6 +15,9 @@ data/raw/en-pl/*.parquet
 !data/raw/en-pl/.gitkeep
 data/processed/en-pl/*.parquet
 !data/processed/en-pl/.gitkeep
+*.tsv
+*.parquet
+
 
 models/
 !models/.gitkeep
@@ -32,3 +40,5 @@ checkpoints/*
 zips/*
 tokenizers/*.vocab
 !tokenizers/.gitkeep
+
+

@@ -1,9 +1,9 @@
 {
-	"name": "Python 3",
+	"name": "TransformetMultiHeadTranslator",
 	"image": "mcr.microsoft.com/devcontainers/python:3-3.12-trixie",
 	"runArgs": [
 		"--gpus",
 		"all"
 	],
-	"postCreateCommand": "pip install -r requirements.txt"
+	"postCreateCommand": "test -f .env || cp .env.example .env; pip install -r requirements.txt"
 }
