@@ -10,3 +10,6 @@ pytest
 sentencepiece
 tqdm
 sacrebleu
+
+# Optional, often broken on Windows because of bicleaner-ai-glove packaging:
+# bicleaner-ai
