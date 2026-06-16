@@ -10,6 +10,7 @@ pytest
 sentencepiece
 tqdm
 sacrebleu
+tensorboard
 
 # Optional, often broken on Windows because of bicleaner-ai-glove packaging:
 # bicleaner-ai

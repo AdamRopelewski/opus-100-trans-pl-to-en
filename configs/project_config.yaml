@@ -135,7 +135,7 @@ stage6_train:
   skip_nan_batches: true
   output_last_checkpoint: checkpoints/model_last.pt
   output_best_checkpoint: checkpoints/model_best.pt
-  log_jsonl: logs/model_train.jsonl
+  tensorboard_log_dir: logs/tensorboard
 
 stage7_eval:
   enabled: true

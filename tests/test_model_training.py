@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import sys
 import warnings
@@ -444,7 +443,7 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
         overfit_loss_threshold=None,
         last_checkpoint_path=tmp_path / "last.pt",
         best_checkpoint_path=tmp_path / "best.pt",
-        log_jsonl_path=tmp_path / "train.jsonl",
+        tensorboard_log_dir=tmp_path / "tensorboard",
         amp_dtype=None,
         use_grad_scaler=False,
         model_config={
@@ -486,10 +485,50 @@ def test_checkpoint_metadata_and_resume_state(tmp_path: Path) -> None:
     assert resume_state.global_step == 1
     assert resume_state.start_epoch == 2
     assert resume_state.best_validation_loss == checkpoint["best_validation_loss"]
+    assert resume_state.learning_rates == pytest.approx(
+        (checkpoint["scheduler_state_dict"]["_last_lr"][0],)
+    )
     for original, resumed in zip(
         model.parameters(), resumed_model.parameters(), strict=True
     ):
         assert torch.equal(original, resumed)
+
+
+def test_resume_without_scheduler_state_restores_lr_from_global_step(
+    tmp_path: Path,
+) -> None:
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    scheduler = build_inverse_sqrt_scheduler(optimizer, warmup_steps=10)
+    path = tmp_path / "old.pt"
+    torch.save(
+        {
+            "epoch": 1,
+            "global_step": 5,
+            "best_validation_loss": 1.5,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+        },
+        path,
+    )
+
+    resumed_model = torch.nn.Linear(2, 1)
+    resumed_optimizer = torch.optim.AdamW(resumed_model.parameters(), lr=1e-3)
+    resumed_scheduler = build_inverse_sqrt_scheduler(
+        resumed_optimizer, warmup_steps=10
+    )
+    resume_state = load_model_checkpoint(
+        path,
+        resumed_model,
+        resumed_optimizer,
+        resumed_scheduler,
+        torch.device("cpu"),
+    )
+
+    assert resume_state.global_step == 5
+    assert resumed_scheduler.last_epoch == 5
+    assert resumed_scheduler.get_last_lr() == pytest.approx([5e-4])
+    assert resume_state.learning_rates == pytest.approx((5e-4,))
 
 
 def test_train_model_stops_after_early_stopping_patience(
@@ -542,7 +581,7 @@ def test_train_model_stops_after_early_stopping_patience(
         overfit_loss_threshold=None,
         last_checkpoint_path=tmp_path / "last.pt",
         best_checkpoint_path=tmp_path / "best.pt",
-        log_jsonl_path=tmp_path / "train.jsonl",
+        tensorboard_log_dir=tmp_path / "tensorboard",
         amp_dtype=None,
         use_grad_scaler=False,
         model_config={
@@ -571,8 +610,4 @@ def test_train_model_stops_after_early_stopping_patience(
     )
     assert last_checkpoint["global_step"] == 3
     assert last_checkpoint["best_validation_loss"] == 1.0
-    events = [
-        json.loads(line) for line in train_cfg.log_jsonl_path.read_text().splitlines()
-    ]
-    assert events[-1]["event"] == "early_stop"
-    assert events[-1]["step"] == 3
+    assert any(train_cfg.tensorboard_log_dir.glob("events.out.tfevents.*"))

@@ -523,7 +523,10 @@ class TrainingJob:
         self.args = args
         self.config = load_config(args.config)
         self.resume_state = ModelResumeState(
-            start_epoch=1, global_step=0, best_validation_loss=float("inf")
+            start_epoch=1,
+            global_step=0,
+            best_validation_loss=float("inf"),
+            learning_rates=(),
         )
 
     def run(self) -> int:
@@ -720,7 +723,8 @@ class TrainingJob:
             return False
         print(
             f"Resumed from {self.args.resume}: start_epoch={self.resume_state.start_epoch} "
-            f"global_step={self.resume_state.global_step} best_validation_loss={self.resume_state.best_validation_loss}"
+            f"global_step={self.resume_state.global_step} best_validation_loss={self.resume_state.best_validation_loss} "
+            f"lr={self.resume_state.learning_rates[0]:.6g}"
         )
         return True
 
@@ -754,9 +758,11 @@ class TrainingJob:
                     "checkpoints/model_best.pt",
                 )
             ),
-            log_jsonl_path=Path(
+            tensorboard_log_dir=Path(
                 get_nested(
-                    self.config, "stage6_train.log_jsonl", "logs/model_train.jsonl"
+                    self.config,
+                    "stage6_train.tensorboard_log_dir",
+                    "logs/tensorboard",
                 )
             ),
             amp_dtype=self.amp_dtype,

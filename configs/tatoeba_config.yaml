@@ -97,15 +97,15 @@ stage6_train:
   micro_batch_size: 64
   grad_accum_steps: 6
   num_epochs: 20
-  validate_every_steps: 1000
-  save_every_steps: 1000
+  validate_every_steps: 2000
+  save_every_steps: 2000
   save_best_by: validation_loss
-  early_stopping_patience: 5
+  early_stopping_patience: 10
   log_grad_norm: true
   skip_nan_batches: true
   output_last_checkpoint: checkpoints/tatoeba/model_last.pt
   output_best_checkpoint: checkpoints/tatoeba/model_best.pt
-  log_jsonl: logs/tatoeba/model_train.jsonl
+  tensorboard_log_dir: logs/tatoeba/tensorboard
 
 stage7_eval:
   enabled: true

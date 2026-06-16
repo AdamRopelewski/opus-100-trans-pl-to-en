@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +11,7 @@ from torch.amp import GradScaler, autocast
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from src.data.collate import TranslationBatch
 from src.train.device import DeviceInfo
@@ -55,7 +54,7 @@ class ModelTrainConfig:
     overfit_loss_threshold: float | None
     last_checkpoint_path: Path
     best_checkpoint_path: Path
-    log_jsonl_path: Path
+    tensorboard_log_dir: Path
     amp_dtype: torch.dtype | None
     use_grad_scaler: bool
     model_config: dict[str, Any]
@@ -71,6 +70,7 @@ class ModelResumeState:
     start_epoch: int
     global_step: int
     best_validation_loss: float
+    learning_rates: tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -89,16 +89,6 @@ class TrainingState:
     global_step: int
     best_validation_loss: float
     validations_without_improvement: int = 0
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _write_log(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _amp_device_type(device: torch.device) -> str:
@@ -133,6 +123,33 @@ def _save_checkpoint(
     )
 
 
+def _move_optimizer_state_to_device(
+    optimizer: torch.optim.Optimizer, device: torch.device
+) -> None:
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device)
+
+
+def _restore_scheduler_from_step(
+    scheduler: torch.optim.lr_scheduler.LRScheduler, step: int
+) -> None:
+    if not isinstance(scheduler, LambdaLR):
+        scheduler.step(step)
+        return
+    scheduler.last_epoch = step
+    lrs = [
+        base_lr * fn(step)
+        for base_lr, fn in zip(
+            scheduler.base_lrs, scheduler.lr_lambdas, strict=True
+        )
+    ]
+    for param_group, lr in zip(scheduler.optimizer.param_groups, lrs, strict=True):
+        param_group["lr"] = lr
+    scheduler._last_lr = lrs
+
+
 def load_model_checkpoint(
     path: Path,
     model: nn.Module,
@@ -143,8 +160,12 @@ def load_model_checkpoint(
     checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     global_step = int(checkpoint.get("global_step", checkpoint.get("step", 0)))
+    _move_optimizer_state_to_device(optimizer, device)
+    if "scheduler_state_dict" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    else:
+        _restore_scheduler_from_step(scheduler, global_step)
     epoch = int(checkpoint.get("epoch", 0))
     best_validation_loss = float(
         checkpoint.get(
@@ -155,6 +176,7 @@ def load_model_checkpoint(
         start_epoch=epoch + 1,
         global_step=global_step,
         best_validation_loss=best_validation_loss,
+        learning_rates=tuple(float(lr) for lr in scheduler.get_last_lr()),
     )
 
 
@@ -204,6 +226,11 @@ class TrainingSession:
         self.device_info = device_info
         self.device = device_info.device
         self.scaler = GradScaler("cuda", enabled=config.use_grad_scaler)
+        self.writer = SummaryWriter(
+            log_dir=str(config.tensorboard_log_dir),
+            purge_step=config.start_step if config.start_step > 0 else None,
+            flush_secs=10,
+        )
         self.state = TrainingState(
             epoch=config.start_epoch,
             global_step=config.start_step,
@@ -211,15 +238,17 @@ class TrainingSession:
         )
 
     def run(self) -> float:
-        self.components.model.to(self.device)
-        self.components.optimizer.zero_grad(set_to_none=True)
-        self._write_start_log()
+        try:
+            self.components.model.to(self.device)
+            self.components.optimizer.zero_grad(set_to_none=True)
 
-        for epoch in range(self.config.start_epoch, self.config.num_epochs + 1):
-            self.state.epoch = epoch
-            if self._run_epoch():
-                break
-        return self.state.best_validation_loss
+            for epoch in range(self.config.start_epoch, self.config.num_epochs + 1):
+                self.state.epoch = epoch
+                if self._run_epoch():
+                    break
+            return self.state.best_validation_loss
+        finally:
+            self.writer.close()
 
     def _run_epoch(self) -> bool:
         for micro_step, batch in enumerate(self.components.train_loader, start=1):
@@ -345,17 +374,6 @@ class TrainingSession:
             self.state.best_validation_loss,
         )
 
-    def _write_start_log(self) -> None:
-        _write_log(
-            self.config.log_jsonl_path,
-            {
-                "event": "start",
-                "mode": self.config.mode,
-                "time_utc": _utc_now(),
-                "start_step": self.config.start_step,
-            },
-        )
-
     def _log_and_print_step(
         self,
         train_loss: float,
@@ -363,57 +381,39 @@ class TrainingSession:
         grad_norm: float | None,
     ) -> None:
         current_lr = float(self.components.scheduler.get_last_lr()[0])
-        self._write_step_log(train_loss, validation_loss, grad_norm, current_lr)
+        self._write_tensorboard_step(train_loss, validation_loss, grad_norm, current_lr)
         print(
             f"step={self.state.global_step} epoch={self.state.epoch} train_loss={train_loss:.4f} "
             f"validation_loss={validation_loss if validation_loss is not None else 'n/a'} "
             f"grad_norm={grad_norm if grad_norm is not None else 'n/a'} lr={current_lr:.6g}"
         )
 
-    def _write_step_log(
+    def _write_tensorboard_step(
         self,
         train_loss: float,
         validation_loss: float | None,
         grad_norm: float | None,
         current_lr: float,
     ) -> None:
-        _write_log(
-            self.config.log_jsonl_path,
-            {
-                "event": "step",
-                "mode": self.config.mode,
-                "time_utc": _utc_now(),
-                "epoch": self.state.epoch,
-                "step": self.state.global_step,
-                "train_loss": train_loss,
-                "validation_loss": validation_loss,
-                "best_validation_loss": self.state.best_validation_loss,
-                "grad_norm": grad_norm,
-                "lr": current_lr,
-            },
+        step = self.state.global_step
+        self.writer.add_scalar("loss/train", train_loss, step)
+        self.writer.add_scalar(
+            "loss/best_validation", self.state.best_validation_loss, step
         )
+        self.writer.add_scalar("train/lr", current_lr, step)
+        self.writer.add_scalar("train/epoch", self.state.epoch, step)
+        if validation_loss is not None:
+            self.writer.add_scalar("loss/validation", validation_loss, step)
+        if grad_norm is not None:
+            self.writer.add_scalar("train/grad_norm", grad_norm, step)
 
     def _stop_after_early_stopping(self, validation_loss: float | None) -> None:
         self._save_checkpoint(self.config.last_checkpoint_path, validation_loss)
-        self._write_early_stop_log(validation_loss)
+        self.writer.add_scalar("train/early_stop", 1, self.state.global_step)
         print(
             "Early stopping triggered: "
             f"{self.state.validations_without_improvement} validations without improvement "
             f"at step={self.state.global_step}."
-        )
-
-    def _write_early_stop_log(self, validation_loss: float | None) -> None:
-        _write_log(
-            self.config.log_jsonl_path,
-            {
-                "event": "early_stop",
-                "mode": self.config.mode,
-                "time_utc": _utc_now(),
-                "epoch": self.state.epoch,
-                "step": self.state.global_step,
-                "validation_loss": validation_loss,
-                "best_validation_loss": self.state.best_validation_loss,
-            },
         )
 
     def _reached_overfit_target(self, validation_loss: float | None) -> bool:
