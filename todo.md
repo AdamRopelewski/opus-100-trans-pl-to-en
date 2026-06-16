@@ -8,15 +8,15 @@
 
 ## Tatoeba multi-parquet pipeline
 
-- [ ] `scripts/download_tatoeba.py`: keep current range download behavior and skip already existing local Parquet files unless `--force` is used.
-- [ ] `scripts/download_tatoeba.py`: keep metadata listing all local Parquet files after each run, not only files downloaded in current run.
-- [ ] `scripts/clean_tatoeba.py`: load local raw Parquet files one-by-one so each row can keep provenance.
-- [ ] `scripts/clean_tatoeba.py`: add `source_parquet` and `source_row_index` to cleaned rows.
-- [ ] `scripts/clean_tatoeba.py`: deduplicate globally across all selected raw Parquet files before training.
-- [ ] `scripts/clean_tatoeba.py`: write removed duplicate examples with `source_parquet` and `source_row_index`.
-- [ ] `scripts/clean_tatoeba.py`: write merged processed Parquet under `data/processed/tatoeba-en-pl` with columns `pl`, `en`, `score`, `source_parquet`, `source_row_index`.
-- [ ] `scripts/clean_tatoeba.py`: keep `train.pl`, `train.en`, and `train.tsv` outputs if still useful, but make Parquet primary training artifact.
-- [ ] `scripts/clean_tatoeba.py`: update `stats.json` with all source Parquets, rows per source file, total duplicate count, and duplicate count per source file.
+- [ ] `scripts/tatoeba/download.py`: keep current range download behavior and skip already existing local Parquet files unless `--force` is used.
+- [ ] `scripts/tatoeba/download.py`: keep metadata listing all local Parquet files after each run, not only files downloaded in current run.
+- [ ] `scripts/tatoeba/clean.py`: load local raw Parquet files one-by-one so each row can keep provenance.
+- [ ] `scripts/tatoeba/clean.py`: add `source_parquet` and `source_row_index` to cleaned rows.
+- [ ] `scripts/tatoeba/clean.py`: deduplicate globally across all selected raw Parquet files before training.
+- [ ] `scripts/tatoeba/clean.py`: write removed duplicate examples with `source_parquet` and `source_row_index`.
+- [ ] `scripts/tatoeba/clean.py`: write merged processed Parquet under `data/processed/tatoeba-en-pl` with columns `pl`, `en`, `score`, `source_parquet`, `source_row_index`.
+- [ ] `scripts/tatoeba/clean.py`: keep `train.pl`, `train.en`, and `train.tsv` outputs if still useful, but make Parquet primary training artifact.
+- [ ] `scripts/tatoeba/clean.py`: update `stats.json` with all source Parquets, rows per source file, total duplicate count, and duplicate count per source file.
 - [ ] `scripts/data_audit.py`: decide whether Tatoeba audit runs on merged processed Parquet or raw multi-Parquet with provenance.
 - [ ] `src/utils/llm_audit.py`: if auditing raw multi-Parquet, make labels source-aware using `split`, `source_parquet`, and `source_row_index` instead of only `split` and row index.
 - [ ] `scripts/clean_data.py`: if shared OPUS stage2 must support multiple raw Parquets per split, replace exact-one split resolver with multi-file resolver.

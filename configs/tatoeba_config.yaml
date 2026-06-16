@@ -1,0 +1,117 @@
+project:
+  name: pl-en-transformer-tatoeba
+  seed: 42
+
+paths:
+  raw_data_dir: data/raw/tatoeba
+  processed_data_dir: data/processed/tatoeba-en-pl/splits
+  reports_dir: reports/tatoeba
+  tokenizer_dir: tokenizers
+  checkpoints_dir: checkpoints/tatoeba
+  logs_dir: logs/tatoeba
+  translations_dir: reports/tatoeba/translations
+
+dataset:
+  source_lang: pl
+  target_lang: en
+  splits:
+    train_pattern: train-*.parquet
+    validation_pattern: validation-*.parquet
+    test_pattern: test-*.parquet
+
+stage2_cleaning:
+  enabled: false
+  outputs:
+    processed_dir: data/processed/tatoeba-en-pl/splits
+
+stage3_tokenizer:
+  enabled: true
+  type: sentencepiece
+  model_type: bpe
+  vocab_size: 16000
+  character_coverage: 1.0
+  joint_vocab: true
+  model_prefix: tokenizers/tatoeba_spm_pl_en
+  input_sentence_size: 2000000
+  shuffle_input_sentence: true
+  special_tokens:
+    pad: "<pad>"
+    unk: "<unk>"
+    bos: "<bos>"
+    eos: "<eos>"
+  outputs:
+    training_corpus: tokenizers/tatoeba_spm_pl_en_train.txt
+    report_md: reports/tatoeba/tokenizer_stats.md
+
+stage4_dataloader:
+  enabled: true
+  max_seq_len: 128
+  pad_to_multiple_of: 8
+  drop_overlength: true
+  shuffle_train: true
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+
+stage5_model:
+  enabled: true
+  preset: base
+  presets:
+    small:
+      d_model: 256
+      nhead: 8
+      num_encoder_layers: 4
+      num_decoder_layers: 4
+      dim_feedforward: 1024
+      dropout: 0.1
+      tie_decoder_embeddings: true
+    base:
+      d_model: 512
+      nhead: 8
+      num_encoder_layers: 6
+      num_decoder_layers: 6
+      dim_feedforward: 2048
+      dropout: 0.1
+      tie_decoder_embeddings: true
+
+stage6_train:
+  enabled: true
+  require_cuda: true
+  device: cuda
+  allow_cpu_fallback: false
+  precision: bf16
+  fallback_precision: fp16
+  lr_peak: 2.0e-4
+  warmup_steps: 8000
+  weight_decay: 0.01
+  label_smoothing: 0.1
+  grad_clip_norm: 1.0
+  micro_batch_size: 64
+  grad_accum_steps: 6
+  num_epochs: 20
+  validate_every_steps: 1000
+  save_every_steps: 1000
+  save_best_by: validation_loss
+  early_stopping_patience: 5
+  log_grad_norm: true
+  skip_nan_batches: true
+  output_last_checkpoint: checkpoints/tatoeba/model_last.pt
+  output_best_checkpoint: checkpoints/tatoeba/model_best.pt
+  log_jsonl: logs/tatoeba/model_train.jsonl
+
+stage7_eval:
+  enabled: true
+  inference_checkpoint: checkpoints/tatoeba/model_inference.pt
+  beam_size: 5
+  batch_size: 8
+  length_penalty: 1.0
+  max_new_tokens: 127
+  metrics:
+    - sacrebleu
+    - chrf
+  save_translations: true
+  num_sample_translations: 100
+  outputs:
+    metrics_json: reports/tatoeba/eval_metrics.json
+    translations_tsv: reports/tatoeba/translations/test_translations.tsv
+    samples_md: reports/tatoeba/translations/sample_translations.md

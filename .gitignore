@@ -11,9 +11,9 @@ __pycache__/
 *.pyc
 
 # Keep dataset folder structure, but ignore heavy parquet files
-data/raw/en-pl/*.parquet
+data/raw/*
 !data/raw/en-pl/.gitkeep
-data/processed/en-pl/*.parquet
+data/processed/*
 !data/processed/en-pl/.gitkeep
 *.tsv
 *.parquet
