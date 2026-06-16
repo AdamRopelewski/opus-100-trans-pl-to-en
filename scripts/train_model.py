@@ -11,9 +11,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 from src.data.collate import TranslationCollator
+from src.data.tokenized_translation_dataset import load_tokenized_translation_dataset
 from src.data.translation_dataset import (
     SpecialTokenIds,
     SplitLoadStats,
@@ -301,6 +302,48 @@ def _load_split_files(config_data: dict) -> dict[str, Path]:
     }
 
 
+def _load_tokenized_split_files(config_data: dict) -> dict[str, tuple[Path, ...]]:
+    tokenized_dir = Path(
+        get_nested(
+            config_data,
+            "stage4_dataloader.tokenized_splits_dir",
+            "data/processed/tatoeba-en-pl/tokenized",
+        )
+    )
+    split_patterns = {
+        "train": str(
+            get_nested(
+                config_data,
+                "stage4_dataloader.tokenized_train_pattern",
+                "train-tokenized-*.parquet",
+            )
+        ),
+        "validation": str(
+            get_nested(
+                config_data,
+                "stage4_dataloader.tokenized_validation_pattern",
+                "validation-tokenized-*.parquet",
+            )
+        ),
+        "test": str(
+            get_nested(
+                config_data,
+                "stage4_dataloader.tokenized_test_pattern",
+                "test-tokenized-*.parquet",
+            )
+        ),
+    }
+    output: dict[str, tuple[Path, ...]] = {}
+    for split in ("train", "validation", "test"):
+        matches = tuple(sorted((tokenized_dir / split).glob(split_patterns[split])))
+        if not matches:
+            raise FileNotFoundError(
+                f"No tokenized parquet files for split '{split}' in '{tokenized_dir / split}' using '{split_patterns[split]}'."
+            )
+        output[split] = matches
+    return output
+
+
 def _load_tokenizer_and_ids(config_data: dict):
     tokenizer_prefix = Path(
         get_nested(config_data, "stage3_tokenizer.model_prefix", "tokenizers/spm_pl_en")
@@ -327,6 +370,12 @@ def _load_datasets(
     drop_overlength = bool(
         get_nested(config_data, "stage4_dataloader.drop_overlength", True)
     )
+
+    use_tokenized_splits = bool(
+        get_nested(config_data, "stage4_dataloader.use_tokenized_splits", False)
+    )
+    if use_tokenized_splits and runtime.mode != "overfit":
+        return _load_tokenized_datasets(config_data, token_ids)
 
     train_dataset, train_stats = load_translation_dataset(
         "train",
@@ -361,6 +410,43 @@ def _load_datasets(
     )
 
 
+def _load_tokenized_datasets(
+    config_data: dict, token_ids: SpecialTokenIds
+) -> DatasetBundle:
+    tokenized_split_files = _load_tokenized_split_files(config_data)
+    seed = int(get_nested(config_data, "project.seed", 42))
+    shuffle_buffer_size = int(
+        get_nested(config_data, "stage4_dataloader.shuffle_buffer_size", 50000)
+    )
+    parquet_batch_size = int(
+        get_nested(config_data, "stage4_dataloader.tokenized_read_batch_size", 8192)
+    )
+    train_dataset, train_stats = load_tokenized_translation_dataset(
+        "train",
+        tokenized_split_files["train"],
+        token_ids=token_ids,
+        shuffle_files=True,
+        shuffle_buffer_size=shuffle_buffer_size,
+        seed=seed,
+        batch_size=parquet_batch_size,
+    )
+    validation_dataset, validation_stats = load_tokenized_translation_dataset(
+        "validation",
+        tokenized_split_files["validation"],
+        token_ids=token_ids,
+        batch_size=parquet_batch_size,
+    )
+    test_dataset, test_stats = load_tokenized_translation_dataset(
+        "test",
+        tokenized_split_files["test"],
+        token_ids=token_ids,
+        batch_size=parquet_batch_size,
+    )
+    return DatasetBundle(
+        train_dataset, validation_dataset, train_stats, validation_stats, test_stats
+    )
+
+
 def _build_dataloaders(
     config_data: dict,
     runtime: ModelRuntimeSettings,
@@ -374,11 +460,23 @@ def _build_dataloaders(
         ),
     )
     loader_kwargs = _loader_kwargs(runtime, collator)
+    train_shuffle = (
+        runtime.shuffle_train
+        if not isinstance(datasets.train_dataset, IterableDataset)
+        else None
+    )
+    validation_shuffle = (
+        False if not isinstance(datasets.validation_dataset, IterableDataset) else None
+    )
+    train_kwargs = dict(loader_kwargs)
+    validation_kwargs = dict(loader_kwargs)
+    if train_shuffle is not None:
+        train_kwargs["shuffle"] = train_shuffle
+    if validation_shuffle is not None:
+        validation_kwargs["shuffle"] = validation_shuffle
     return (
-        DataLoader(
-            datasets.train_dataset, shuffle=runtime.shuffle_train, **loader_kwargs
-        ),
-        DataLoader(datasets.validation_dataset, shuffle=False, **loader_kwargs),
+        DataLoader(datasets.train_dataset, **train_kwargs),
+        DataLoader(datasets.validation_dataset, **validation_kwargs),
     )
 
 
@@ -546,8 +644,8 @@ class TrainingJob:
 
     def _datasets_empty(self) -> bool:
         return (
-            len(self.datasets.train_dataset) == 0
-            or len(self.datasets.validation_dataset) == 0
+            self.datasets.train_stats.rows_out == 0
+            or self.datasets.validation_stats.rows_out == 0
             or self.datasets.test_stats.rows_out == 0
         )
 

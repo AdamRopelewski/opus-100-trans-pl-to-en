@@ -5,6 +5,7 @@ Tatoeba-specific scripts live under `scripts/tatoeba/`:
 - `scripts/tatoeba/download.py` downloads raw Tatoeba.
 - `scripts/tatoeba/clean.py` cleans raw Tatoeba and writes cleaned shards.
 - `scripts/tatoeba/split.py` deduplicates cleaned shards and writes final train/validation/test splits.
+- `scripts/tatoeba/train_tokenizer.py` trains tokenizer with `configs/tatoeba_config.yaml` by default.
 - `scripts/tatoeba/train.py` trains with `configs/tatoeba_config.yaml` by default.
 - `scripts/tatoeba/evaluate.py` evaluates with `configs/tatoeba_config.yaml` by default.
 
@@ -78,7 +79,7 @@ Default validation and test sizes are 2000 rows each. Manifest includes rows in,
 Use shared training/eval scripts with Tatoeba config:
 
 ```bash
-python scripts/train_tokenizer.py --config configs/tatoeba_config.yaml --force
+python scripts/tatoeba/train_tokenizer.py --force
 python scripts/tatoeba/train.py
 python scripts/tatoeba/evaluate.py
 ```
@@ -86,6 +87,7 @@ python scripts/tatoeba/evaluate.py
 Equivalent direct commands:
 
 ```bash
+python scripts/train_tokenizer.py --config configs/tatoeba_config.yaml --force
 python scripts/train_model.py --config configs/tatoeba_config.yaml
 python scripts/evaluate_model.py --config configs/tatoeba_config.yaml
 ```

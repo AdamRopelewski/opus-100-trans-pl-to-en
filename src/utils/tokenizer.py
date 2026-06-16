@@ -39,17 +39,22 @@ class SplitTokenizerStats:
     unk_rate: float
 
 
-def iter_parallel_rows(path: Path) -> Iterator[tuple[str, str]]:
-    table = pq.read_table(path)
-    names = table.column_names
+def iter_parallel_rows(path: Path, batch_size: int = 8192) -> Iterator[tuple[str, str]]:
+    parquet_file = pq.ParquetFile(path)
+    names = parquet_file.schema_arrow.names
     if "translation" in names:
-        for row in table["translation"].to_pylist():
-            yield str(row.get("pl", "")), str(row.get("en", ""))
+        for batch in parquet_file.iter_batches(
+            batch_size=batch_size, columns=["translation"]
+        ):
+            for row in batch.column("translation").to_pylist():
+                yield str(row.get("pl", "")), str(row.get("en", ""))
         return
     if "pl" not in names or "en" not in names:
         raise ValueError(f"Expected columns 'pl' and 'en' or 'translation' in {path}.")
-    for pl_text, en_text in zip(table["pl"].to_pylist(), table["en"].to_pylist(), strict=True):
-        yield str(pl_text), str(en_text)
+    for batch in parquet_file.iter_batches(batch_size=batch_size, columns=["pl", "en"]):
+        data = batch.to_pydict()
+        for pl_text, en_text in zip(data["pl"], data["en"], strict=True):
+            yield str(pl_text), str(en_text)
 
 
 def write_training_corpus(train_file: Path, output_path: Path) -> int:

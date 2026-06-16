@@ -17,6 +17,8 @@ import torch
 
 from src.data.collate import TranslationCollator, make_causal_mask
 from scripts.train_model import _resolve_runtime_settings, _select_validation_dataset
+from scripts.tatoeba.tokenize_splits import tokenize_split
+from src.data.tokenized_translation_dataset import load_tokenized_translation_dataset
 from src.data.translation_dataset import (
     SpecialTokenIds,
     SplitLoadStats,
@@ -49,6 +51,11 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
 
 def _encode(text: str) -> list[int]:
     return [ord(ch) % 20 + 4 for ch in text.replace(" ", "")]
+
+
+class _FakeTokenizer:
+    def encode(self, text: str) -> list[int]:
+        return _encode(text)
 
 
 def _training_components(
@@ -97,6 +104,71 @@ def test_load_translation_dataset_supports_cleaned_parquet_columns(
     assert stats.rows_in == 1
     assert stats.rows_out == 1
     assert dataset[0].src_ids[-1] == 3
+
+
+def test_tatoeba_tokenize_split_writes_tokenized_parquet(tmp_path: Path) -> None:
+    input_path = tmp_path / "train.parquet"
+    output_dir = tmp_path / "tokenized"
+    _write_parquet(
+        input_path,
+        [
+            {"pl": "kot", "en": "cat"},
+            {"pl": "bardzo dlugie zdanie", "en": "long"},
+        ],
+    )
+
+    stats = tokenize_split(
+        "train",
+        input_path,
+        output_dir,
+        _FakeTokenizer(),
+        SpecialTokenIds(),
+        max_seq_len=8,
+        drop_overlength=True,
+        shard_rows=1,
+        overwrite=False,
+        progress=False,
+    )
+
+    assert stats.rows_in == 2
+    assert stats.rows_out == 1
+    assert stats.overlength_rows == 1
+    assert stats.files_written == 1
+    table = pq.read_table(
+        output_dir / "train" / "train-tokenized-00001-of-00001.parquet"
+    )
+    row = table.to_pylist()[0]
+    assert row["src_ids"][-1] == SpecialTokenIds().eos_id
+    assert "tgt_in_ids" not in row
+    assert "tgt_out_ids" not in row
+    assert row["tgt_ids"] == _encode("cat")
+
+
+def test_tokenized_translation_dataset_streams_parquet(tmp_path: Path) -> None:
+    path = tmp_path / "train-tokenized-00000.parquet"
+    table = pa.Table.from_pylist(
+        [
+            {"src_ids": [4, 3], "tgt_ids": [5]},
+            {"src_ids": [6, 3], "tgt_ids": [7]},
+        ],
+        schema=pa.schema(
+            [
+                pa.field("src_ids", pa.list_(pa.int32())),
+                pa.field("tgt_ids", pa.list_(pa.int32())),
+            ]
+        ),
+    )
+    pq.write_table(table, path, compression="zstd")
+
+    dataset, stats = load_tokenized_translation_dataset(
+        "train", (path,), batch_size=1
+    )
+    examples = list(dataset)
+
+    assert stats.rows_out == 2
+    assert examples[0].src_ids == [4, 3]
+    assert examples[0].tgt_in_ids == [SpecialTokenIds().bos_id, 5]
+    assert examples[1].tgt_out_ids == [7, 3]
 
 
 def test_collator_pads_masks_and_causal_mask() -> None:

@@ -48,8 +48,16 @@ stage4_dataloader:
   max_seq_len: 128
   pad_to_multiple_of: 8
   drop_overlength: true
+  use_tokenized_splits: true
+  tokenized_splits_dir: data/processed/tatoeba-en-pl/tokenized
+  tokenized_train_pattern: train-tokenized-*.parquet
+  tokenized_validation_pattern: validation-tokenized-*.parquet
+  tokenized_test_pattern: test-tokenized-*.parquet
+  tokenized_shard_rows: 500000
+  tokenized_read_batch_size: 8192
+  shuffle_buffer_size: 50000
   shuffle_train: true
-  num_workers: 4
+  num_workers: 0
   pin_memory: true
   prefetch_factor: 2
 
