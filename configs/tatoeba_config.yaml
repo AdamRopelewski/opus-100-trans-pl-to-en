@@ -111,7 +111,7 @@ stage7_eval:
   enabled: true
   inference_checkpoint: checkpoints/tatoeba/model_inference.pt
   beam_size: 5
-  batch_size: 8
+  batch_size: 4
   length_penalty: 1.0
   max_new_tokens: 127
   metrics:
